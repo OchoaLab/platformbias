@@ -1,6 +1,6 @@
-Package: popgeninfer
+Package: platformbias
 Title: Tests and simulations of genotyping platform bias
-Version: 0.0.8.9000
+Version: 0.0.9.9000
 Authors@R: c(
     person(given = "Alejandro",
 	   family = "Ochoa",
@@ -17,7 +17,6 @@ Description: Code for testing genotyping statistical bias, and for producing sim
 License: GPL (>= 3)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.2
 Suggests: 
     knitr,
     rmarkdown,
@@ -29,3 +28,4 @@ Imports:
     stringi
 Config/testthat/edition: 3
 VignetteBuilder: knitr
+Config/roxygen2/version: 8.1.0

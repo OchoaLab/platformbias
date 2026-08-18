@@ -1,8 +1,8 @@
 ---
-title: "popgeninfer"
+title: "platformbias"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{popgeninfer}
+  %\VignetteIndexEntry{platformbias}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -38,7 +38,7 @@ First we consider the simplest setting, where there is a single ancestry, so the
 We will use allele counts to perform these statistical tests while taking sample sizes into account.
 
 ```{r setup}
-library(popgeninfer)
+library(platformbias)
 ```
 
 ### Null data: equal allele frequency in both datasets

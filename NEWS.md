@@ -39,3 +39,7 @@
 # popgeninfer 0.0.8.9000 (2025-03-31)
 
 - Function `filter_eval` now returns a new column "removed" that simply counts total removals.
+
+# platformbias 0.0.9.9000 (2026-08-18)
+
+- Renamed package from `popgeninfer` to `platformbias`.
