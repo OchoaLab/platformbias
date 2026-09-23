@@ -8,7 +8,9 @@ option_list = list(
   make_option(c( "-c", "--covar"), type = "character",
               help = "covar file that matches with the input data", metavar = "character"),
   make_option(c( "-o", "--out"), type = "character", default = NA, 
-              help = "Output prefix", metavar = "character")
+              help = "Output prefix", metavar = "character"),
+  make_option(c( "-s", "--seed"), type = "integer", default = NULL, 
+              help = "Seed for random number generator", metavar = "integer")
 )
 
 opt_parser <- OptionParser(option_list = option_list)
@@ -17,6 +19,8 @@ opt <- parse_args(opt_parser)
 plinkFile <- opt$f
 phenoFile <- opt$c
 outputPrefix <- opt$o
+
+set.seed( opt$seed )
 
 phenoCol= 'pheno'
 sampleIDColinphenoFile='iid' 

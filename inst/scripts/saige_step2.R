@@ -5,7 +5,9 @@ option_list = list(
   make_option(c( "-f", "--file"), type = "character",
               help = "input file, after plink removed sig snps", metavar = "character"),
   make_option(c( "-o", "--out"), type = "character", default = NA, 
-              help = "Output prefix", metavar = "character")
+              help = "Output prefix", metavar = "character"),
+  make_option(c( "-s", "--seed"), type = "integer", default = NULL, 
+              help = "Seed for random number generator", metavar = "integer")
 )
 
 opt_parser <- OptionParser(option_list = option_list)
@@ -13,6 +15,8 @@ opt <- parse_args(opt_parser)
 # get values
 plinkFile <- opt$f
 outputPrefix <- opt$o
+
+set.seed( opt$seed )
 
 GMMATmodelFile = paste0(outputPrefix, '.rda') 
 varianceRatioFile = paste0(outputPrefix, '.varianceRatio.txt') 

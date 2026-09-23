@@ -6,9 +6,9 @@ run_saige() {
     local output_prefix=$3
 
     echo "SAIGE step1..."
-    time Rscript $SCRIPT_DIR/saige_step1_nocovar.R -f "$input_bfile" -c "$covar" -o "$output_prefix" > ${output_prefix}_step1.log
+    time Rscript $SCRIPT_DIR/saige_step1_nocovar.R -f "$input_bfile" -c "$covar" -o "$output_prefix" > ${output_prefix}_step1.log $SEEDOPT
     echo "SAIGE step2..."
-    time Rscript $SCRIPT_DIR/saige_step2.R -f "$input_bfile" -o "$output_prefix" > ${output_prefix}_step2.log
+    time Rscript $SCRIPT_DIR/saige_step2.R -f "$input_bfile" -o "$output_prefix" > ${output_prefix}_step2.log $SEEDOPT
     
     # cleanup!
     rm ${output_prefix}{_output.txt.index,.rda,.varianceRatio.txt}
