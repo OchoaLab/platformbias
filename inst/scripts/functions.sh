@@ -2,13 +2,13 @@
 
 run_saige() {
     local input_bfile=$1
-    local covar=$2
+    local platform_file=$2
     local output_prefix=$3
 
     echo "SAIGE step1..."
-    time Rscript $SCRIPT_DIR/saige_step1_nocovar.R -f "$input_bfile" -c "$covar" -o "$output_prefix" > ${output_prefix}_step1.log $SEEDOPT
+    time Rscript $SCRIPT_DIR/saige_step1_nocovar.R -f "$input_bfile" -p "$platform_file" -o "$output_prefix" $SEEDOPT > ${output_prefix}_step1.log
     echo "SAIGE step2..."
-    time Rscript $SCRIPT_DIR/saige_step2.R -f "$input_bfile" -o "$output_prefix" > ${output_prefix}_step2.log $SEEDOPT
+    time Rscript $SCRIPT_DIR/saige_step2.R -f "$input_bfile" -o "$output_prefix" $SEEDOPT > ${output_prefix}_step2.log
     
     # cleanup!
     rm ${output_prefix}{_output.txt.index,.rda,.varianceRatio.txt}
@@ -44,14 +44,20 @@ run_plink_flip() {
     local exclude_file=$2
     local output_prefix=$3
     local flip_file=$4
-    local flip_id_file=$5
-    
+    local platform_file=$5
+
+    # make flip ID file (really platform 2 IDs)
+    time Rscript $SCRIPT_DIR/make_platform_id_file.R -p "$platform_file" -o PLATFORM-TWO-IDs.txt
+
     plink2 --bfile "$input_data"  \
 	 --flip "$flip_file" \
-	 --flip-subset "$flip_id_file" \
+	 --flip-subset PLATFORM-TWO-IDs.txt \
 	 --exclude "$exclude_file" \
 	 --silent \
 	 --make-bed --out "$output_prefix"
+
+    # cleanup
+    rm PLATFORM-TWO-IDs.txt
 }
 
 run_phase2_flip_snps() {

@@ -1,14 +1,12 @@
 # determine location of this script (and its dependencies), absolute path!
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 
-# TODO: check that $PVAL, $input_data, $flip_id_file, and $covar_file are defined!
+# TODO: check that $PVAL, $input_data and $platform_file are defined!
 # add absolute paths to all files, so they keep working as we change paths
 # this works even on strings without complete extensions like this one, and doesn't change absolute paths
 input_data=$(readlink -f "$input_data")
-# used to flip individuals in only one platform, only one time
-flip_id_file=$(readlink -f "$flip_id_file")
 # used by saige only
-covar_file=$(readlink -f "$covar_file")
+platform_file=$(readlink -f "$platform_file")
 
 # load scripts
 source $SCRIPT_DIR/functions.sh
@@ -27,7 +25,7 @@ file_path="saige_0_output.txt.gz"
 if [ -f "$file_path" ]; then
   echo "SAIGE output for iteration 0 already exists. Skipping initial SAIGE execution"
 else
-  run_saige "$input_data" "$covar_file" "saige_$ITER"
+  run_saige "$input_data" "$platform_file" "saige_$ITER"
 fi
 # HACK OUTPUTS: saige_0_output.txt
 # DELETED IMMEDIATELY: saige_0_output.txt.index  saige_0.rda  saige_0.varianceRatio.txt
@@ -78,7 +76,7 @@ while :; do
   run_plink_remove "$input_bfile" "$remove_file" "$ITER"
 
   # Run SAIGE
-  run_saige "$ITER" "$covar_file" "saige_phase1_$ITER"
+  run_saige "$ITER" "$platform_file" "saige_phase1_$ITER"
 
   # Increment for next iteration
   ITER=$((ITER + 1))
@@ -98,13 +96,13 @@ run_phase2_flip_snps "$input_data"
 # process flip and removal of SNPs, created new plink files
 
 # TODO: flip-subset file should be created automatically, somehow...
-run_plink_flip "$input_data" phase2_init_remove.txt 0 phase2_init_flip.txt "$flip_id_file"
+run_plink_flip "$input_data" phase2_init_remove.txt 0 phase2_init_flip.txt "$platform_file"
 
 # output file written as 'control_0' in phase2 folder, next step is to run saige
 ITER=0
 
 while :; do
-  run_saige "$ITER" "$covar_file" "saige_phase2_$ITER"
+  run_saige "$ITER" "$platform_file" "saige_phase2_$ITER"
 
   # identify significant SNPs
   run_identify_sig_snps "phase2" "$ITER" "$PVAL"

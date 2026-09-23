@@ -2,10 +2,7 @@
 PVAL=1e-02
 # these need to exist already
 input_data=test
-# in practice this will be deducible from BIM file
-flip_id_file="id_p2.txt"
-# this appears to be misnamed, it's saige's PhenoFile (i.e. platform indicator)
-covar_file="covar.txt"
+platform_file=platform.txt
 # more hacks to run saige from pixi environment
 # NOTE: also need to install other R packages in pixi env: optparse, genio, tidyverse, pak, then platformbias from github (for now)
 shopt -s expand_aliases

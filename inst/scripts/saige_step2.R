@@ -14,8 +14,8 @@ option_list = list(
 opt_parser <- OptionParser(option_list = option_list)
 opt <- parse_args(opt_parser)
 # get values
-plinkFile <- opt$f
-outputPrefix <- opt$o
+plinkFile <- opt$file
+outputPrefix <- opt$out
 
 set.seed( opt$seed )
 
