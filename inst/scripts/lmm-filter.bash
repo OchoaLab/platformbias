@@ -27,7 +27,6 @@ file_path="saige_0_output.txt.gz"
 if [ -f "$file_path" ]; then
   echo "SAIGE output for iteration 0 already exists. Skipping initial SAIGE execution"
 else
-  echo "SAIGE running for your input data"
   run_saige "$input_data" "$covar_file" "saige_$ITER"
 fi
 # HACK OUTPUTS: saige_0_output.txt
@@ -50,7 +49,6 @@ cd $PVAL
 # start phase 1
 echo "Starting Phase 1"
 
-# TODO: if we don't use this log directly, maybe don't bother making it?
 # create summary file and record 'remove' for each iteration
 summary_file="iteration_summary.txt"
 echo -e "phase\tITER\tremove" > "$summary_file"
@@ -59,22 +57,18 @@ while :; do
 # Rscript identifies significant SNPs; writes remove_phase1_$ITER.txt
   run_identify_sig_snps "phase1" "$ITER" "$PVAL"
 
-  # TODO: prev script doesn't have to die, and we count removals anyway and could test if it was zero or not
-  # if R script failed due to no significant snps, stop loop
-  if [ $? -ne 0 ]; then
-    echo "R script failed at ITER=$ITER. Exiting loop."
-    break
-  fi
-
-  # Count removed SNPs
-  echo "count removed SNPs..."
-
   remove_file="remove_phase1_$ITER.txt"
   remove_count=$(wc -l < "$remove_file")
+
+  # stop loop when there are zero removals
+  if (( remove_count == 0 )); then
+    echo "No removals at ITER=$ITER. Exiting loop."
+    break
+  fi
+  # else update log
   echo -e "1\t$ITER\t$remove_count" >> "$summary_file"
 
   # plink removes SNPs
-  echo "plink remove SNPs..."
   if [ "$ITER" -eq 0 ]; then
     input_bfile="$input_data"
   else
@@ -84,7 +78,6 @@ while :; do
   run_plink_remove "$input_bfile" "$remove_file" "$ITER"
 
   # Run SAIGE
-  echo "run saige."
   run_saige "$ITER" "$covar_file" "saige_phase1_$ITER"
 
   # Increment for next iteration
@@ -104,13 +97,8 @@ run_phase2_flip_snps "$input_data"
 
 # process flip and removal of SNPs, created new plink files
 
-# TODO: make a function like the other cases?  Just for clarity?
 # TODO: flip-subset file should be created automatically, somehow...
-time plink2 --bfile "$input_data"  \
-  --flip phase2_init_flip.txt \
-  --flip-subset "$flip_id_file" \
-  --exclude phase2_init_remove.txt \
-  --make-bed --out 0
+run_plink_flip "$input_data" phase2_init_remove.txt 0 phase2_init_flip.txt "$flip_id_file"
 
 # output file written as 'control_0' in phase2 folder, next step is to run saige
 ITER=0
@@ -121,15 +109,16 @@ while :; do
   # identify significant SNPs
   run_identify_sig_snps "phase2" "$ITER" "$PVAL"
 
-  # if R script failed due to no significant snps, stop loop
-  if [ $? -ne 0 ]; then
-    echo "R script failed at ITER=$ITER. Exiting loop."
-    break
-  fi
-
   # Count removed SNPs
   remove_file="remove_phase2_$ITER.txt"
   remove_count=$(wc -l < "$remove_file")
+  
+  # stop loop when there are zero removals
+  if (( remove_count == 0 )); then
+    echo "No removals at ITER=$ITER. Exiting loop."
+    break
+  fi
+  # else update log
   echo -e "2\t$ITER\t$remove_count" >> "$summary_file"
 
   # remove snps with plink
@@ -143,7 +132,7 @@ done
 rm $ITER.{bed,bim,fam,log}
 
 # produce final output of method, preds.txt.gz, which summarizes which loci are keep, remove, or flip.
-time Rscript $SCRIPT_DIR/lmm-classify.R -f "$input_data"
+Rscript $SCRIPT_DIR/lmm-classify.R -f "$input_data"
 
 # if we're here, presumably everything was good and we don't need those bulky logs anymore... (they're only for troubleshooting)
 rm saige_phase?_*_step?.log

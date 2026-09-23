@@ -19,7 +19,7 @@ run_identify_sig_snps() {
     local index=$2
     local pval=$3
 
-    time Rscript $SCRIPT_DIR/snp_remove.R -l "$phase" -i "$index" -p "$pval"
+    Rscript $SCRIPT_DIR/snp_remove.R -l "$phase" -i "$index" -p "$pval"
 }
 
 run_plink_remove() {
@@ -27,9 +27,10 @@ run_plink_remove() {
     local exclude_file=$2
     local output_prefix=$3
     
-    time plink2 --bfile "$input_bfile" \
+    plink2 --bfile "$input_bfile" \
         --exclude "$exclude_file" \
-        --make-bed --out "$output_prefix"
+        --make-bed --out "$output_prefix" \
+	--silent
 
     # cleanup: we don't need input anymore unless it's the original file!
     if [[ $input_bfile != "$input_data" ]]; then
@@ -38,7 +39,22 @@ run_plink_remove() {
     fi
 }
 
+run_plink_flip() {
+    local input_data=$1
+    local exclude_file=$2
+    local output_prefix=$3
+    local flip_file=$4
+    local flip_id_file=$5
+    
+    plink2 --bfile "$input_data"  \
+	 --flip "$flip_file" \
+	 --flip-subset "$flip_id_file" \
+	 --exclude "$exclude_file" \
+	 --silent \
+	 --make-bed --out "$output_prefix"
+}
+
 run_phase2_flip_snps() {
     local input=$1
-    time Rscript $SCRIPT_DIR/snp_flip.R -f "$input"
+    Rscript $SCRIPT_DIR/snp_flip.R -f "$input"
 }

@@ -1,5 +1,3 @@
-library(tidyverse)
-library(genio)
 library(platformbias)
 library(optparse) 
 
@@ -20,7 +18,10 @@ input_file <- opt$f
 # assumes we're inside the phase2 dir
 
 # read BIM file to add data to
-bim <- read_bim( input_file ) %>% select( chr, id, ref, alt )
+bim <- read.table( paste0( input_file, '.bim' ), header = FALSE )
+colnames( bim ) <- c('chr', 'id', 'posg', 'pos', 'alt', 'ref')
+# subset to desired columns and reorder
+bim <- bim[ , c('chr', 'id', 'ref', 'alt') ]
 
 # identify reverse complement cases, which are "flippable" (not strictly necessary, though these files I've made usually have them and allow for internal checks)
 bim$revcomp <- bim$ref == revcomp( bim$alt )
@@ -28,8 +29,8 @@ bim$revcomp <- bim$ref == revcomp( bim$alt )
 ### LMM DATA ###
 
 # first read final "phase2" edits, including permanently removed and temporarily flipped locus
-remove <- read_lines( "phase2_init_remove.txt" )
-flip <- read_lines( "phase2_init_flip.txt" )
+remove <- readLines( "phase2_init_remove.txt" )
+flip <- readLines( "phase2_init_flip.txt" )
 
 # check that remove and flip are unique and disjoint
 stopifnot( length( remove ) == length( unique( remove ) ) )
@@ -37,7 +38,7 @@ stopifnot( length( flip ) == length( unique( flip ) ) )
 stopifnot( length( intersect( remove, flip ) ) == 0 )
 
 # phase 2 removals 
-phase2_snps <- read_lines( "remove_phase2.txt" )
+phase2_snps <- readLines( "remove_phase2.txt" )
 total_remove <- union( remove, phase2_snps )
 
 # final text classification
@@ -47,11 +48,8 @@ bim$category <- 'keep'
 bim$category[ bim$id %in% flip ] <- 'flip'
 bim$category[ bim$id %in% total_remove ] <- 'remove'
 
-# data checks, should pass if all is good
-# all indexes are present and ordered continuously, match IDs (big assumption above!)
-#stopifnot( all( bim$id == 1 : nrow( bim ) ) )
 # confirm that all loci that were flipped are actually flippable
 stopifnot( all( bim$revcomp[ bim$category == 'flip' ] ) )
 
 # save updated/extended `bim`, the key calculation!
-write_tsv( bim, 'preds.txt.gz' )
+write.table( bim, 'preds.txt.gz', quote = FALSE, sep = "\t", row.names = FALSE )

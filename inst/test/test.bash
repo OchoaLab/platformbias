@@ -19,4 +19,8 @@ SEEDOPT='-s 2026'
 time . ../scripts/lmm-filter.bash
 
 # compare new output to most recent one
-#zdiff lmm-filter{,_EXPECTED}/1e-02/preds.txt.gz 
+zdiff -q lmm-filter{,_EXPECTED}/1e-02/preds.txt.gz 
+diff -q lmm-filter{,_EXPECTED}/1e-02/iteration_summary.txt 
+
+# cleanup!
+rm -r lmm-filter/
