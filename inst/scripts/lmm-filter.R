@@ -6,7 +6,6 @@ library(optparse)
 # - make flip (phase2) optional (in WGS data it shouldn't be needed)
 # - add phase3 experiment
 # minor tasks
-# - merge SAIGE steps
 # - streamline tracking of removals and flips without writing files
 
 ## rlang::global_entrace()
@@ -14,7 +13,7 @@ library(optparse)
 
 # main function/loop
 # initial p-value is string because we want folder name to be exactly this ("1e-02" instead of "0.01"), but after dir is made we can turn to numeric
-lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lmm-filter', script_dir = '.', seed = NULL ) {
+lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lmm-filter' ) {
     # validate inputs
     if ( missing( input_data ) )
         stop( '`input_data` is required!' )
@@ -28,9 +27,6 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     }
     if ( !file.exists( platform_file ) )
         stop( 'Input does not exist: ', platform_file )
-    
-    # to pass to SAIGE
-    seedopt <- if ( !is.null( seed ) ) paste0( '-s ', seed ) else ''
     
     # force inputs to have absolute paths
     # for `input_data`, need to add extension (so file exists, otherwise this doesn't work), then take it back off
@@ -46,14 +42,14 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     ########################################################################
 
     phase <- 1
-    ITER <- 0
-    message( 'phase ', phase, ', iter ', ITER )
+    iter <- 0
+    message( 'phase ', phase, ', iter ', iter )
 
     # iteration 0 is the same for all p-values, put it in base directory to share automatically
-    runtime <- run_saige( input_data, platform_file, paste0( 'saige_', ITER ), script_dir, seedopt )
+    runtime <- run_saige( phase, iter, platform_file, input_data )
     # compress the first output only, if there's need
-    if ( file.exists( 'saige_0_output.txt' ) )
-        system2( 'gzip', 'saige_0_output.txt' )
+    if ( file.exists( 'saige_phase1_0_output.txt' ) )
+        system2( 'gzip', 'saige_phase1_0_output.txt' )
 
     # if the directory exists, delete entirely! (to avoid overwriting existing files)
     if ( dir.exists( pval ) )
@@ -67,13 +63,13 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     iteration_summary <- NULL
 
     repeat {
-        # Rscript identifies significant SNPs; writes remove_phase1_$ITER.txt
-        out <- run_identify_sig_snps( phase, ITER, pval )
+        # Rscript identifies significant SNPs; writes remove_phase1_$iter.txt
+        out <- run_identify_sig_snps( phase, iter, pval )
         remove_file <- out$remove_file
         remove_count <- out$remove_count
         
         # update log, even for stoping iterations because they took time (saige)
-        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, ITER = ITER, remove = remove_count, saige_runtime = runtime ) )
+        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, remove = remove_count, saige_runtime = runtime ) )
         
         # stop loop when there are zero removals
         if ( remove_count == 0 )
@@ -81,64 +77,62 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
         
         # plink removes SNPs
         # get previous iteration file as the input file for plink processing
-        input_bfile <- if ( ITER == 0 ) input_data else ITER - 1
-        run_plink_remove( input_bfile, remove_file, ITER, input_data )
+        input_bfile <- if ( iter == 0 ) input_data else iter
+        run_plink_remove( input_bfile, remove_file, iter + 1, input_data )
         
-        message( 'phase ', phase, ', iter ', ITER + 1 )
+        # Increment for next iteration
+        iter <- iter + 1
+        
+        message( 'phase ', phase, ', iter ', iter )
         
         # Run SAIGE
-        runtime <- run_saige( ITER, platform_file, paste0( 'saige_phase', phase, '_', ITER ), script_dir, seedopt )
-
-        # Increment for next iteration
-        ITER <- ITER + 1
+        runtime <- run_saige( phase, iter, platform_file )
     }
 
     # more cleanup
     # delete last bed/bim/fam files (not used in phase2)
-    unlink( paste0( ITER - 1, '.', c( 'bed', 'bim', 'fam', 'log' ) ) )
+    unlink( paste0( iter - 1, '.', c( 'bed', 'bim', 'fam', 'log' ) ) )
 
     ########################################################################
 
     # start phase 2
     phase <- 2
+    iter <- 0
 
     # identify snps to flip and remove
     run_phase2_flip_snps( input_data )
 
     # process flip and removal of SNPs, created new plink files
-    run_plink_flip( input_data, 'phase2_init_remove.txt', 0, 'phase2_init_flip.txt', platform_file )
+    run_plink_flip( input_data, 'phase2_init_remove.txt', iter, 'phase2_init_flip.txt', platform_file )
     
-    # output file written as 'control_0' in phase2 folder, next step is to run saige
-    ITER <- 0
-
     repeat { 
-        message( 'phase ', phase, ', iter ', ITER )
-        runtime <- run_saige( ITER, platform_file, paste0( 'saige_phase', phase, '_', ITER ), script_dir, seedopt )
+        message( 'phase ', phase, ', iter ', iter )
+        runtime <- run_saige( phase, iter, platform_file )
 
         # identify significant SNPs
-        out <- run_identify_sig_snps( phase, ITER, pval )
+        out <- run_identify_sig_snps( phase, iter, pval )
         remove_file <- out$remove_file
         remove_count <- out$remove_count
 
         # update log, even for stoping iterations because they took time (saige)
-        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, ITER = ITER, remove = remove_count, saige_runtime = runtime ) )
+        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, remove = remove_count, saige_runtime = runtime ) )
         
         # stop loop when there are zero removals
         if ( remove_count == 0 )
             break
         
         # remove snps with plink
-        run_plink_remove( ITER, remove_file, ITER + 1, input_data )
+        run_plink_remove( iter, remove_file, iter + 1, input_data )
 
         # Increment for next iteration
-        ITER <- ITER + 1
+        iter <- iter + 1
     }
     
     # write summary data, now that it is complete!
     write.table( iteration_summary, "iteration_summary.txt", quote = FALSE, sep = "\t", row.names = FALSE )
     
     # delete BED files again.  These are not what we may want in the end because it's controls only.  In practice we want to process full data separately, following `preds.txt.gz`.
-    unlink( paste0( ITER, '.', c( 'bed', 'bim', 'fam', 'log' ) ) )
+    unlink( paste0( iter, '.', c( 'bed', 'bim', 'fam', 'log' ) ) )
     
     # produce final output of method, preds.txt.gz, which summarizes which loci are keep, remove, or flip.
     lmm_classify( input_data )
@@ -150,41 +144,43 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     system( 'gzip saige_phase?_*_output.txt' )
 }
 
-run_saige <- function( input_bfile, platform_file, output_prefix, script_dir, seedopt ) {
+# global vars used here: seed, script_dir
+run_saige <- function( phase, iter, platform_file, input_bfile = iter ) {
+    output_prefix <- paste0( 'saige_phase', phase, '_', iter )
     # don't run if output already exists!
     output_file <- paste0( output_prefix, '_output.txt' )
     # case we actually want to avoid repeating will be compressed
     if ( file.exists( paste0( output_file, '.gz' ) ) )
         return( 0 )
     
+    # to pass to SAIGE
+    seedopt <- if ( !is.null( seed ) ) paste0( '-s ', seed ) else ''
+    
     # merged steps
-    time <- system.time( system( paste0( 'Rscript ', script_dir, '/saige.R -f "', input_bfile, '" -p "', platform_file, '" -o "', output_prefix, '" ', seedopt, ' > ', output_prefix, '.log' ) ) )[3]
+    command <- paste0( 'Rscript ', script_dir, '/saige.R -f "', input_bfile, '" -p "', platform_file, '" -o "', output_prefix, '" ', seedopt, ' > ', output_prefix, '.log' )
+    time <- system.time( system( command ) )[3]
     
     # cleanup, not needed if run was successful
-    unlink( paste0( output_prefix, c( '_output.txt.index', '.rda', '.varianceRatio.txt', '.log' ) ) ) # , '_step1.log', '_step2.log'
+    unlink( paste0( output_prefix, c( '_output.txt.index', '.rda', '.varianceRatio.txt', '.log' ) ) )
 
     # add time to log
     return( time )
 }
 
 # TODO: this could all be handled virtually (not writing files)
-run_identify_sig_snps <- function( phase, iter_num, pval ) {
+run_identify_sig_snps <- function( phase, iter, pval ) {
     # organize file names across different phases and iterations
     # main file
     main_file <- paste0("remove_phase", phase, ".txt")
 
     # input file
-    saige_output <- if ( phase == 1 && iter_num == 0 ) {
-                        "../saige_0_output.txt.gz" # only this one is already compressed
-                    } else if ( phase == 1 ) {
-                        # read saige output file from previous iteration
-                        paste0("saige_phase", phase, '_', iter_num -1, "_output.txt")
-                    } else if ( phase == 2 ) {
-                        paste0("saige_phase", phase, '_', iter_num, "_output.txt")
-                    }
-
+    saige_output <- paste0("saige_phase", phase, '_', iter, "_output.txt")
+    # only this one is compressed and one level down
+    if ( phase == 1 && iter == 0 )
+        saige_output <- paste0( '../', saige_output, '.gz' )
+    
     # output file for current iteration
-    current_file <- paste0("remove_phase", phase, "_", iter_num, ".txt")
+    current_file <- paste0("remove_phase", phase, "_", iter, ".txt")
 
     # main script
     data <- read.table( saige_output, header = TRUE )
@@ -195,7 +191,7 @@ run_identify_sig_snps <- function( phase, iter_num, pval ) {
     # this can be an empty file (loop outside decides to stop when that happens)
     writeLines( sig_snps, current_file )
 
-    if (iter_num == 0) {
+    if ( iter == 0 ) {
         # this creates main file
         writeLines( sig_snps, main_file )
     } else if ( remove_count > 0 ) {
@@ -343,8 +339,7 @@ input_data <- opt$file
 platform_file <- opt$platform
 pval <- opt$pval
 dir_out <- opt$dir_out
-
-#set.seed( opt$seed )
+seed <- opt$seed
 
 # annoying work to get current script location, to call other scripts within it as we navigate a directory structure elsewhere
 initial_options <- commandArgs(trailingOnly = FALSE)
@@ -353,4 +348,5 @@ script_path <- sub(file_arg, "", initial_options[grep(file_arg, initial_options)
 # Get the directory
 script_dir <- normalizePath( dirname(script_path) )
 
-lmm_filter( input_data, platform_file, pval = pval, dir_out = dir_out, script_dir = script_dir, seed = opt$seed )
+# global vars: seed, script_dir
+lmm_filter( input_data, platform_file, pval = pval, dir_out = dir_out )
