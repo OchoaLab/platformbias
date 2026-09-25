@@ -63,7 +63,6 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     iteration_summary <- NULL
 
     repeat {
-        # Rscript identifies significant SNPs; writes remove_phase1_$iter.txt
         out <- run_identify_sig_snps( phase, iter, pval )
         remove_file <- out$remove_file
         remove_count <- out$remove_count
@@ -91,7 +90,7 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
 
     # more cleanup
     # delete last bed/bim/fam files (not used in phase2)
-    unlink( paste0( iter - 1, '.', c( 'bed', 'bim', 'fam', 'log' ) ) )
+    delete_plink_bed( iter )
 
     ########################################################################
 
@@ -132,16 +131,10 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     write.table( iteration_summary, "iteration_summary.txt", quote = FALSE, sep = "\t", row.names = FALSE )
     
     # delete BED files again.  These are not what we may want in the end because it's controls only.  In practice we want to process full data separately, following `preds.txt.gz`.
-    unlink( paste0( iter, '.', c( 'bed', 'bim', 'fam', 'log' ) ) )
+    delete_plink_bed( iter )
     
     # produce final output of method, preds.txt.gz, which summarizes which loci are keep, remove, or flip.
     lmm_classify( input_data )
-    
-    # if we're here, presumably everything was good and we don't need those bulky logs anymore... (they're only for troubleshooting)
-    #rm saige_phase?_*_step?.log
-    # for now let's keep the full saige files, in case we wanted their p-values...
-    # (otherwise consider deleting them)
-    system( 'gzip saige_phase?_*_output.txt' )
 }
 
 # global vars used here: seed, script_dir
@@ -174,23 +167,26 @@ run_identify_sig_snps <- function( phase, iter, pval ) {
     main_file <- paste0("remove_phase", phase, ".txt")
 
     # input file
-    saige_output <- paste0("saige_phase", phase, '_', iter, "_output.txt")
-    # only this one is compressed and one level down
-    if ( phase == 1 && iter == 0 )
-        saige_output <- paste0( '../', saige_output, '.gz' )
+    saige_output_file <- paste0("saige_phase", phase, '_', iter, "_output.txt")
+    # only this one is compressed and one level down, because it's shared
+    shared <- phase == 1 && iter == 0
+    if ( shared )
+        saige_output_file <- paste0( '../', saige_output_file, '.gz' )
     
     # output file for current iteration
+    # plink2 will use this to remove SNPs from BED file, then it gets deleted
     current_file <- paste0("remove_phase", phase, "_", iter, ".txt")
-
-    # main script
-    data <- read.table( saige_output, header = TRUE )
+    
+    # read SAIGE summary statistics
+    data <- read.table( saige_output_file, header = TRUE )
     sig_snps <- as.character( data$MarkerID[ data$p.value < pval ] )
     remove_count <- length( sig_snps )
 
     # writes separate file just for this iteration
-    # this can be an empty file (loop outside decides to stop when that happens)
-    writeLines( sig_snps, current_file )
-
+    # don't bother writing an empty file
+    if ( remove_count > 0 )
+        writeLines( sig_snps, current_file )
+    
     if ( iter == 0 ) {
         # this creates main file
         writeLines( sig_snps, main_file )
@@ -201,6 +197,10 @@ run_identify_sig_snps <- function( phase, iter, pval ) {
         writeLines( combined_snps, main_file )
     }
 
+    # cleanup: don't need SAIGE file anymore, unless it's the shared one
+    if ( !shared )
+        unlink( saige_output_file )
+    
     # return a few things
     list( remove_file = current_file, remove_count = remove_count )
 }
@@ -221,6 +221,9 @@ run_phase2_flip_snps <- function( input_data ) {
     writeLines( sig_snps_remove, "phase2_init_remove.txt" )
 }
 
+delete_plink_bed <- function( input_bfile )
+    unlink( paste0( input_bfile, '.', c( 'bed', 'bim', 'fam', 'log' ) ) )
+
 run_plink_remove <- function( input_bfile, exclude_file, output_prefix, input_data ) {
     # remove SNPs with plink2
     system2(
@@ -236,8 +239,9 @@ run_plink_remove <- function( input_bfile, exclude_file, output_prefix, input_da
 
     # cleanup: we don't need input anymore unless it's the original file!
     if ( input_bfile != input_data )
-	unlink( paste0( input_bfile, '.', c( 'bed', 'bim', 'fam', 'log' ) ) )
-    # TODO: do we still need ${input_bfile}_output.txt ???
+        delete_plink_bed( input_bfile )
+    # we're also done with this file
+    unlink( exclude_file )
 }
 
 run_plink_flip <- function( input_data, exclude_file, output_prefix, flip_file, platform_file ) {
