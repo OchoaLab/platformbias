@@ -1,19 +1,28 @@
-# generate data for replicates
-PVAL=1e-02
-# these need to exist already
-input_data=test
-platform_file=platform.txt
 # more hacks to run saige from pixi environment
 # NOTE: also need to install other R packages in pixi env: optparse, genio, tidyverse, pak, then platformbias from github (for now)
 shopt -s expand_aliases
 alias Rscript="pixi run -m ~/bin/src/github/SAIGE/ Rscript"
 
-# set a seed so saige (which is random) gives reproducible results in tests
-# saige is still sort of random, but maybe less so?
-SEEDOPT='-s 2026'
+### OLD
 
-# run lmm-filter!
-time . ../scripts/lmm-filter.bash
+# # generate data for replicates
+# PVAL=1e-02
+# # these need to exist already
+# input_data=test
+# platform_file=platform.txt
+
+# # set a seed so saige (which is random) gives reproducible results in tests
+# # saige is still sort of random, but maybe less so?
+# SEEDOPT='-s 2026'
+
+# # run lmm-filter!
+# time . ../scripts/lmm-filter.bash
+
+### NEW
+
+time Rscript ../scripts/lmm-filter.R -f test --platform platform.txt -s 2026
+
+### SHARED
 
 # compare new output to most recent one
 zdiff -q lmm-filter{,_EXPECTED}/1e-02/preds.txt.gz 
