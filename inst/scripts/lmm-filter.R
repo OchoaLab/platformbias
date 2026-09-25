@@ -1,12 +1,9 @@
 library(platformbias) 
-#library(SAIGE)
 library(optparse)
 
 # big pic TODOs
 # - make flip (phase2) optional (in WGS data it shouldn't be needed)
 # - add phase3 experiment
-# minor tasks
-# - streamline tracking of removals and flips without writing files
 
 ## rlang::global_entrace()
 ## options(rlang_backtrace_on_error = "full")
@@ -33,6 +30,9 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     input_data <- sub( '.bed$', '', normalizePath( paste0( input_data, '.bed' ) ) )
     platform_file <- normalizePath( platform_file )
 
+    # load BIM file, used to track edits and write final output
+    bim <- read_bim( input_data )
+    
     # all outputs should go in a subdirectory
     # this directory may exist already, if we're running for different thresholds
     if ( !dir.exists( dir_out ) )
@@ -43,13 +43,9 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
 
     phase <- 1
     iter <- 0
-    message( 'phase ', phase, ', iter ', iter )
 
     # iteration 0 is the same for all p-values, put it in base directory to share automatically
-    runtime <- run_saige( phase, iter, platform_file, input_data )
-    # compress the first output only, if there's need
-    if ( file.exists( 'saige_phase1_0_output.txt' ) )
-        system2( 'gzip', 'saige_phase1_0_output.txt' )
+    saige <- run_saige( phase, iter, platform_file, input_data )
 
     # if the directory exists, delete entirely! (to avoid overwriting existing files)
     if ( dir.exists( pval ) )
@@ -63,29 +59,24 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     iteration_summary <- NULL
 
     repeat {
-        out <- run_identify_sig_snps( phase, iter, pval )
-        remove_file <- out$remove_file
-        remove_count <- out$remove_count
+        out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
+        bim <- out$bim
+        count <- out$count
         
         # update log, even for stoping iterations because they took time (saige)
-        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, remove = remove_count, saige_runtime = runtime ) )
+        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, remove = count, saige_runtime = saige$time ) )
         
         # stop loop when there are zero removals
-        if ( remove_count == 0 )
-            break
+        if ( count == 0 ) break
         
         # plink removes SNPs
-        # get previous iteration file as the input file for plink processing
-        input_bfile <- if ( iter == 0 ) input_data else iter
-        run_plink_remove( input_bfile, remove_file, iter + 1, input_data )
+        run_plink_remove( phase, iter, bim, input_data )
         
         # Increment for next iteration
         iter <- iter + 1
         
-        message( 'phase ', phase, ', iter ', iter )
-        
         # Run SAIGE
-        runtime <- run_saige( phase, iter, platform_file )
+        saige <- run_saige( phase, iter, platform_file )
     }
 
     # more cleanup
@@ -98,30 +89,25 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     phase <- 2
     iter <- 0
 
-    # identify snps to flip and remove
-    run_phase2_flip_snps( input_data )
-
     # process flip and removal of SNPs, created new plink files
-    run_plink_flip( input_data, 'phase2_init_remove.txt', iter, 'phase2_init_flip.txt', platform_file )
+    bim <- run_plink_flip( bim, input_data, iter, platform_file )
     
     repeat { 
-        message( 'phase ', phase, ', iter ', iter )
-        runtime <- run_saige( phase, iter, platform_file )
+        saige <- run_saige( phase, iter, platform_file )
 
         # identify significant SNPs
-        out <- run_identify_sig_snps( phase, iter, pval )
-        remove_file <- out$remove_file
-        remove_count <- out$remove_count
+        out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
+        bim <- out$bim
+        count <- out$count
 
         # update log, even for stoping iterations because they took time (saige)
-        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, remove = remove_count, saige_runtime = runtime ) )
+        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, remove = count, saige_runtime = saige$time ) )
         
         # stop loop when there are zero removals
-        if ( remove_count == 0 )
-            break
+        if ( count == 0 ) break
         
         # remove snps with plink
-        run_plink_remove( iter, remove_file, iter + 1, input_data )
+        run_plink_remove( phase, iter, bim, input_data )
 
         # Increment for next iteration
         iter <- iter + 1
@@ -134,97 +120,103 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     delete_plink_bed( iter )
     
     # produce final output of method, preds.txt.gz, which summarizes which loci are keep, remove, or flip.
-    lmm_classify( input_data )
+    write_preds( bim )
+}
+
+# read BIM table, mark flippable SNPs, initialize output
+read_bim <- function( input_data ) {
+    bim <- read.table( paste0( input_data, '.bim' ), header = FALSE )
+    colnames( bim ) <- c('chr', 'id', 'posg', 'pos', 'alt', 'ref')
+    # subset to desired columns and reorder
+    bim <- bim[ , c('chr', 'id', 'ref', 'alt') ]
+    # a persistent issue is, at least in simulations, IDs are read as numeric, but writeLines requires character (and normally IDs are character)
+    bim$id <- as.character( bim$id )
+    # identify reverse complement cases, which are "flippable"
+    bim$revcomp <- bim$ref == revcomp( bim$alt )
+    # initialize category, which will get overwritten as we go
+    bim$category <- 'keep'
+    # other info for when edits occured
+    # there's no phase 0, so 0,0 means unedited (to avoid NAs, which make some queries more difficult)
+    bim$phase <- 0
+    bim$iter <- 0
+    return( bim )
 }
 
 # global vars used here: seed, script_dir
 run_saige <- function( phase, iter, platform_file, input_bfile = iter ) {
-    output_prefix <- paste0( 'saige_phase', phase, '_', iter )
-    # don't run if output already exists!
+    # every iteration starts with a SAIGE run, might as well put this here
+    message( 'phase ', phase, ', iter ', iter )
+    
+    output_prefix <- paste0( 'saige_', phase, '_', iter )
     output_file <- paste0( output_prefix, '_output.txt' )
+    # first case can be compressed if it exists already
+    output_file_gz <- paste0( output_file, '.gz' )
+    
+    # don't run if output already exists!
     # case we actually want to avoid repeating will be compressed
-    if ( file.exists( paste0( output_file, '.gz' ) ) )
-        return( 0 )
-    
-    # to pass to SAIGE
-    seedopt <- if ( !is.null( seed ) ) paste0( '-s ', seed ) else ''
-    
-    # merged steps
-    command <- paste0( 'Rscript ', script_dir, '/saige.R -f "', input_bfile, '" -p "', platform_file, '" -o "', output_prefix, '" ', seedopt, ' > ', output_prefix, '.log' )
-    time <- system.time( system( command ) )[3]
-    
-    # cleanup, not needed if run was successful
-    unlink( paste0( output_prefix, c( '_output.txt.index', '.rda', '.varianceRatio.txt', '.log' ) ) )
+    if ( file.exists( output_file_gz ) ) {
+        # don't run, set time as zero
+        time <- 0
+        # and tell other script this is the file to use
+        output_file <- output_file_gz
+    } else {
+        # actually run
+        # to pass to SAIGE
+        seedopt <- if ( !is.null( seed ) ) paste0( '-s ', seed ) else ''
+        
+        # merged steps
+        command <- paste0( 'Rscript ', script_dir, '/saige.R -f "', input_bfile, '" -p "', platform_file, '" -o "', output_prefix, '" ', seedopt, ' > ', output_prefix, '.log' )
+        time <- system.time( system( command ) )[3]
+        
+        # cleanup, not needed if run was successful
+        unlink( paste0( output_prefix, c( '_output.txt.index', '.rda', '.varianceRatio.txt', '.log' ) ) )
 
-    # add time to log
-    return( time )
+        # compress first output only
+        if ( phase == 1 && iter == 0 ) {
+            system2( 'gzip', output_file )
+            # and tell other script this is the file to use
+            output_file <- output_file_gz
+        }
+    }
+    
+    # return file actually created (with full path, since we're going to move) and runtime for log
+    return( list( file = normalizePath( output_file ), time = time ) )
 }
 
-# TODO: this could all be handled virtually (not writing files)
-run_identify_sig_snps <- function( phase, iter, pval ) {
-    # organize file names across different phases and iterations
-    # main file
-    main_file <- paste0("remove_phase", phase, ".txt")
-
-    # input file
-    saige_output_file <- paste0("saige_phase", phase, '_', iter, "_output.txt")
-    # only this one is compressed and one level down, because it's shared
-    shared <- phase == 1 && iter == 0
-    if ( shared )
-        saige_output_file <- paste0( '../', saige_output_file, '.gz' )
-    
-    # output file for current iteration
-    # plink2 will use this to remove SNPs from BED file, then it gets deleted
-    current_file <- paste0("remove_phase", phase, "_", iter, ".txt")
-    
+identify_sig_snps <- function( phase, iter, pval, bim, saige_output_file ) {
     # read SAIGE summary statistics
     data <- read.table( saige_output_file, header = TRUE )
+    # get significant SNPs, which are the new removals
     sig_snps <- as.character( data$MarkerID[ data$p.value < pval ] )
-    remove_count <- length( sig_snps )
-
-    # writes separate file just for this iteration
-    # don't bother writing an empty file
-    if ( remove_count > 0 )
-        writeLines( sig_snps, current_file )
     
-    if ( iter == 0 ) {
-        # this creates main file
-        writeLines( sig_snps, main_file )
-    } else if ( remove_count > 0 ) {
-        # Load existing main SNPs and update it
-        snps_main <- readLines( main_file )
-        combined_snps <- union( snps_main, sig_snps )
-        writeLines( combined_snps, main_file )
-    }
-
-    # cleanup: don't need SAIGE file anymore, unless it's the shared one
-    if ( !shared )
+    # mark new removals in BIM file, with detailed info
+    indexes <- bim$id %in% sig_snps
+    bim$category[ indexes ] <- 'remove'
+    bim$phase[ indexes ] <- phase
+    bim$iter[ indexes ] <- iter
+    
+    # cleanup: don't need SAIGE file anymore, unless it's the first one
+    if ( phase != 1 || iter != 0 )
         unlink( saige_output_file )
     
     # return a few things
-    list( remove_file = current_file, remove_count = remove_count )
-}
-
-run_phase2_flip_snps <- function( input_data ) {
-    # identify SNPs that can be flipped
-    remove_snps <- readLines( "remove_phase1.txt" )
-
-    bim <- read.table( paste0( input_data, '.bim' ), header = FALSE )
-    colnames( bim ) <- c('chr', 'id', 'posg', 'pos', 'alt', 'ref')
-    ids_revcomp <- bim$id[ bim$ref == revcomp( bim$alt ) ]
-
-    sig_snps_flip <- intersect( remove_snps, ids_revcomp )
-    sig_snps_remove <- setdiff( remove_snps, ids_revcomp )
-
-    # write output and rerun saige
-    writeLines( sig_snps_flip, "phase2_init_flip.txt" )
-    writeLines( sig_snps_remove, "phase2_init_remove.txt" )
+    list( bim = bim, count = length( sig_snps ) )
 }
 
 delete_plink_bed <- function( input_bfile )
     unlink( paste0( input_bfile, '.', c( 'bed', 'bim', 'fam', 'log' ) ) )
 
-run_plink_remove <- function( input_bfile, exclude_file, output_prefix, input_data ) {
+run_plink_remove <- function( phase, iter, bim, input_data ) {
+    # special behavior for very first case only
+    first <- phase == 1 && iter == 0
+    input_bfile <- if ( first ) input_data else iter
+    
+    # make file with SNP IDs to remove using bim table
+    # for maximum efficiency, fish out removals from this phase/iteration only
+    exclude_file <- paste0("remove_phase", phase, "_", iter, ".txt")
+    ids_rm <- bim$id[ bim$phase == phase & bim$iter == iter ]
+    writeLines( ids_rm, exclude_file )
+    
     # remove SNPs with plink2
     system2(
         'plink2',
@@ -232,19 +224,27 @@ run_plink_remove <- function( input_bfile, exclude_file, output_prefix, input_da
             '--bfile', input_bfile,
             '--exclude', exclude_file,
             '--make-bed',
-            '--out', output_prefix,
+            '--out', iter + 1,
             '--silent'
         )
     )
 
     # cleanup: we don't need input anymore unless it's the original file!
-    if ( input_bfile != input_data )
+    if ( !first )
         delete_plink_bed( input_bfile )
     # we're also done with this file
     unlink( exclude_file )
 }
 
-run_plink_flip <- function( input_data, exclude_file, output_prefix, flip_file, platform_file ) {
+run_plink_flip <- function( bim, input_data, output_prefix, platform_file ) {
+    # first, reclassify SNPs that are currently "remove" and flippable as "flip" (to be further removed in subsequent iterations)
+    bim$category[ bim$category == 'remove' & bim$revcomp ] <- 'flip'
+    # write these SNP IDs into files to perform edit in plink file
+    exclude_file <- 'phase2_init_remove.txt'
+    flip_file <- 'phase2_init_flip.txt'
+    writeLines( bim$id[ bim$category == 'remove' ], exclude_file )
+    writeLines( bim$id[ bim$category == 'flip' ], flip_file )
+    
     # make flip ID file (really platform 2 IDs)
     platform_two_id_file <- 'PLATFORM-TWO-IDs.txt'
 
@@ -270,47 +270,18 @@ run_plink_flip <- function( input_data, exclude_file, output_prefix, flip_file, 
     )
 
     # cleanup
-    unlink( platform_two_id_file )
-    # NOTE: this uses the original input data always, never delete it! (unlike run_plink_remove)
+    unlink( c( platform_two_id_file, exclude_file, flip_file ) )
+    # NOTE: this uses the original `input_data` always, never delete it! (unlike run_plink_remove)
+    
+    # this was edited, return!
+    return( bim )
 }
 
-lmm_classify <- function( input_file ) {
-    # takes predictions (disorganized remove and flip lists) for a certain run, and produces a nice classification vector and other useful info, similar to preds.txt.gz for the simpler methods
-
-    # read BIM file to add data to
-    bim <- read.table( paste0( input_file, '.bim' ), header = FALSE )
-    colnames( bim ) <- c('chr', 'id', 'posg', 'pos', 'alt', 'ref')
-    # subset to desired columns and reorder
-    bim <- bim[ , c('chr', 'id', 'ref', 'alt') ]
-
-    # identify reverse complement cases, which are "flippable" (not strictly necessary, though these files I've made usually have them and allow for internal checks)
-    bim$revcomp <- bim$ref == revcomp( bim$alt )
-
-    ### LMM DATA ###
-
-    # first read final "phase2" edits, including permanently removed and temporarily flipped locus
-    remove <- readLines( "phase2_init_remove.txt" )
-    flip <- readLines( "phase2_init_flip.txt" )
-
-    # check that remove and flip are unique and disjoint
-    stopifnot( length( remove ) == length( unique( remove ) ) )
-    stopifnot( length( flip ) == length( unique( flip ) ) )
-    stopifnot( length( intersect( remove, flip ) ) == 0 )
-
-    # phase 2 removals 
-    phase2_snps <- readLines( "remove_phase2.txt" )
-    total_remove <- union( remove, phase2_snps )
-
-    # final text classification
-    # this is most cases
-    bim$category <- 'keep'
-    # "flip" will have cases overwritten into "remove" if they were subsequently removed (in phase 3), happens in next step
-    bim$category[ bim$id %in% flip ] <- 'flip'
-    bim$category[ bim$id %in% total_remove ] <- 'remove'
-
-    # confirm that all loci that were flipped are actually flippable
-    stopifnot( all( bim$revcomp[ bim$category == 'flip' ] ) )
-
+write_preds <- function( bim ) {
+    # HACK TMP
+    # remove new columns, to simplify comparisons to old outputs
+    #bim <- bim[ , 1:6 ]
+    
     # save updated/extended `bim`, the key calculation!
     write.table( bim, 'preds.txt.gz', quote = FALSE, sep = "\t", row.names = FALSE )
 }
