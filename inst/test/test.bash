@@ -24,10 +24,8 @@ time Rscript ../scripts/lmm-filter.R -f test --platform platform.txt -s 2026
 
 ### SHARED
 
-# compare new output to most recent one
-zdiff -q lmm-filter{,_EXPECTED}/1e-02/preds.txt.gz
-# now they include runtime, they'll be slightly different each time
-#diff -q lmm-filter{,_EXPECTED}/1e-02/iteration_summary.txt 
+# compare new output to most recent one, with tolerance for p-value precision and runtime variance
+Rscript compare_outputs.R
 
 # cleanup!
 rm -r lmm-filter/

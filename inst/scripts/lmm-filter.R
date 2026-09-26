@@ -95,7 +95,6 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     repeat { 
         saige <- run_saige( phase, iter, platform_file )
 
-        # identify significant SNPs
         out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
         bim <- out$bim
         count <- out$count
@@ -139,6 +138,9 @@ read_bim <- function( input_data ) {
     # there's no phase 0, so 0,0 means unedited (to avoid NAs, which make some queries more difficult)
     bim$phase <- 0
     bim$iter <- 0
+    # and the p-values, these are best initialized to NA
+    bim$pval_fwd <- NA
+    bim$pval_rev <- NA
     return( bim )
 }
 
@@ -186,6 +188,25 @@ run_saige <- function( phase, iter, platform_file, input_bfile = iter ) {
 identify_sig_snps <- function( phase, iter, pval, bim, saige_output_file ) {
     # read SAIGE summary statistics
     data <- read.table( saige_output_file, header = TRUE )
+    
+    # we want to remember all p-values (not just significant ones)
+    # most of these get overwritten at every iteration; removed loci keep their last p-value before removal
+    # in phase > 1, revcomp loci have p-values assigned to reverse orientation (not forward), but other loci have forward p-values overwritten
+    # assume SAIGE is the subset (due to removals); all SAIGE SNPs have to be in BIM
+    # this is a vector of indexes, length of SAIGE table
+    indexes <- match( data$MarkerID, bim$id )
+    if ( phase == 1 ) {
+        bim$pval_fwd[ indexes ] <- data$p.value
+    } else {
+        # here assignment depends on whether the SNP has been flipped already or not
+        # this is a logical vector same length as indexes
+        indexes2 <- bim$category[ indexes ] == 'flip'
+        # when true, assign to REV
+        bim$pval_rev[ indexes[ indexes2 ] ] <- data$p.value[ indexes2 ]
+        # when false, assign to FWD again
+        bim$pval_fwd[ indexes[ !indexes2 ] ] <- data$p.value[ !indexes2 ]
+    }
+    
     # get significant SNPs, which are the new removals
     sig_snps <- as.character( data$MarkerID[ data$p.value < pval ] )
     
@@ -277,15 +298,8 @@ run_plink_flip <- function( bim, input_data, output_prefix, platform_file ) {
     return( bim )
 }
 
-write_preds <- function( bim ) {
-    # HACK TMP
-    # remove new columns, to simplify comparisons to old outputs
-    #bim <- bim[ , 1:6 ]
-    
-    # save updated/extended `bim`, the key calculation!
-    write.table( bim, 'preds.txt.gz', quote = FALSE, sep = "\t", row.names = FALSE )
-}
-
+write_preds <- function( bim )
+    write.table( bim, gzfile( 'preds.txt.gz' ), quote = FALSE, sep = "\t", row.names = FALSE )
 
 
 
