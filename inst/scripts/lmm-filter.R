@@ -196,7 +196,8 @@ run_saige <- function( phase, iter, platform_file, input_bfile = iter ) {
 
         # compress first output only
         if ( phase == 1 && iter == 0 ) {
-            system2( 'gzip', output_file )
+            ret <- system2( 'gzip', output_file )
+            if ( ret != 0 ) stop( 'gzip failed with return value: ', ret )
             # and tell other script this is the file to use
             output_file <- output_file_gz
         }
@@ -291,7 +292,7 @@ run_plink_remove <- function( phase, iter, bim, input_data ) {
     writeLines( ids_rm, exclude_file )
     
     # remove SNPs with plink2
-    system2(
+    ret <- system2(
         'plink2',
         c(
             '--bfile', input_bfile,
@@ -301,6 +302,7 @@ run_plink_remove <- function( phase, iter, bim, input_data ) {
             '--silent'
         )
     )
+    if ( ret != 0 ) stop( 'plink2 failed with return value: ', ret, ' (see logs)' )
 
     # cleanup: we don't need input anymore unless it's the original file!
     if ( !first )
@@ -339,7 +341,7 @@ run_plink_flip <- function( phase, iter, bim, input_data, platform_file ) {
     write.table( data, platform_two_id_file, quote = FALSE, sep = "\t", row.names = FALSE )
 
     # run plink to remove loci and flip subset
-    system2(
+    ret <- system2(
         'plink2',
         c(
             '--bfile', input_data,
@@ -351,7 +353,8 @@ run_plink_flip <- function( phase, iter, bim, input_data, platform_file ) {
             '--flip-subset', platform_two_id_file
         )
     )
-
+    if ( ret != 0 ) stop( 'plink2 failed with return value: ', ret, ' (see logs)' )
+    
     # cleanup
     unlink( c( platform_two_id_file, exclude_file, flip_file ) )
     # NOTE: this uses the original `input_data` always, never delete it! (unlike run_plink_remove)
