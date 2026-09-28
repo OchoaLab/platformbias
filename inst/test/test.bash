@@ -20,7 +20,7 @@ alias Rscript="pixi run -m ~/bin/src/github/SAIGE/ Rscript"
 
 ### NEW
 
-time Rscript ../scripts/lmm-filter.R -f test --platform platform.txt -s 2026
+time Rscript ../scripts/lmm-filter.R --bfile test --platform platform.txt -s 2026
 
 ### SHARED
 
@@ -29,4 +29,11 @@ Rscript compare_outputs.R
 Rscript validate_preds.R
 
 # cleanup!
+rm -r lmm-filter/
+
+## NOFLIP version!
+
+time Rscript ../scripts/lmm-filter.R --bfile test --platform platform.txt -s 2026 --noflip
+Rscript compare_outputs.R --noflip
+Rscript validate_preds.R --noflip
 rm -r lmm-filter/

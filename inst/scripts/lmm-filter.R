@@ -1,12 +1,9 @@
 library(platformbias) 
 library(optparse)
 
-# big pic TODOs
-# - make flip (phase2) optional (in WGS data it shouldn't be needed)
-
 # main function/loop
 # initial p-value is string because we want folder name to be exactly this ("1e-02" instead of "0.01"), but after dir is made we can turn to numeric
-lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lmm-filter' ) {
+lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lmm-filter', flip = TRUE ) {
     # validate inputs
     if ( missing( input_data ) )
         stop( '`input_data` is required!' )
@@ -27,7 +24,7 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     platform_file <- normalizePath( platform_file )
 
     # load BIM file, used to track edits and write final output
-    bim <- read_bim( input_data )
+    bim <- read_bim( input_data, flip )
     
     # all outputs should go in a subdirectory
     # this directory may exist already, if we're running for different thresholds
@@ -79,60 +76,62 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     # delete last bed/bim/fam files (not used in phase2)
     delete_plink_bed( iter )
 
-    ########################################################################
+    if ( flip ) {
+        ########################################################################
 
-    # start phase 2
-    phase <- 2
-    iter <- 0
+        # start phase 2
+        phase <- 2
+        iter <- 0
 
-    # process flip and removal of SNPs, created new plink files
-    bim <- run_plink_flip( phase, iter, bim, input_data, platform_file )
-    
-    repeat { 
+        # process flip and removal of SNPs, created new plink files
+        bim <- run_plink_flip( phase, iter, bim, input_data, platform_file )
+        
+        repeat { 
+            saige <- run_saige( phase, iter, platform_file )
+
+            out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
+            bim <- out$bim
+            count <- out$count
+
+            # update log, even for stoping iterations because they took time (saige)
+            iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, edits = count, saige_runtime = saige$time ) )
+            
+            # stop loop when there are zero removals
+            if ( count == 0 ) break
+            
+            # remove snps with plink
+            run_plink_remove( phase, iter, bim, input_data )
+
+            # Increment for next iteration
+            iter <- iter + 1
+        }
+        
+        # delete BED files again.  These are not what we may want in the end because it's controls only.  In practice we want to process full data separately, following `preds.txt.gz`.
+        delete_plink_bed( iter )
+        
+        ########################################################################
+
+        # start phase 3
+        phase <- 3
+        iter <- 0
+
+        # created new plink files with remaining flippable SNPs flipped, to test both orientations
+        run_plink_flip( phase, iter, bim, input_data, platform_file )
+        
+        # phase 3 is a single iteration, since nothing else is getting removed
         saige <- run_saige( phase, iter, platform_file )
 
+        # perform the final classification!
         out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
         bim <- out$bim
         count <- out$count
-
+        
         # update log, even for stoping iterations because they took time (saige)
         iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, edits = count, saige_runtime = saige$time ) )
-        
-        # stop loop when there are zero removals
-        if ( count == 0 ) break
-        
-        # remove snps with plink
-        run_plink_remove( phase, iter, bim, input_data )
 
-        # Increment for next iteration
-        iter <- iter + 1
+        # delete files one more time
+        delete_plink_bed( iter )
     }
-    
-    # delete BED files again.  These are not what we may want in the end because it's controls only.  In practice we want to process full data separately, following `preds.txt.gz`.
-    delete_plink_bed( iter )
-    
-    ########################################################################
-
-    # start phase 3
-    phase <- 3
-    iter <- 0
-
-    # created new plink files with remaining flippable SNPs flipped, to test both orientations
-    run_plink_flip( phase, iter, bim, input_data, platform_file )
-    
-    # phase 3 is a single iteration, since nothing else is getting removed
-    saige <- run_saige( phase, iter, platform_file )
-
-    # perform the final classification!
-    out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
-    bim <- out$bim
-    count <- out$count
-    
-    # update log, even for stoping iterations because they took time (saige)
-    iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, edits = count, saige_runtime = saige$time ) )
-
-    # delete files one more time
-    delete_plink_bed( iter )
 
     # write summary data, now that it is complete!
     write.table( iteration_summary, "iteration_summary.txt", quote = FALSE, sep = "\t", row.names = FALSE )
@@ -142,7 +141,7 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
 }
 
 # read BIM table, mark flippable SNPs, initialize output
-read_bim <- function( input_data ) {
+read_bim <- function( input_data, flip = TRUE ) {
     bim <- read.table( paste0( input_data, '.bim' ), header = FALSE )
     colnames( bim ) <- c('chr', 'id', 'posg', 'pos', 'alt', 'ref')
     # subset to desired columns and reorder
@@ -150,7 +149,8 @@ read_bim <- function( input_data ) {
     # a persistent issue is, at least in simulations, IDs are read as numeric, but writeLines requires character (and normally IDs are character)
     bim$id <- as.character( bim$id )
     # identify reverse complement cases, which are "flippable"
-    bim$revcomp <- bim$ref == revcomp( bim$alt )
+    if ( flip )
+        bim$revcomp <- bim$ref == revcomp( bim$alt )
     # initialize category, which will get overwritten as we go
     bim$category <- 'keep'
     # other info for when edits occured
@@ -159,7 +159,8 @@ read_bim <- function( input_data ) {
     bim$iter <- 0
     # and the p-values, these are best initialized to NA
     bim$pval_fwd <- NA
-    bim$pval_rev <- NA
+    if ( flip )
+        bim$pval_rev <- NA
     return( bim )
 }
 
@@ -370,8 +371,8 @@ write_preds <- function( bim )
 
 # terminal inputs
 option_list = list(
-    make_option(c( "-f", "--file"), type = "character",
-                help = "input plink binary file without extensions", metavar = "character"),
+    make_option("--bfile", type = "character",
+                help = "Input plink binary file without extensions (bed/bim/fam)", metavar = "character"),
     make_option("--platform", type = "character",
                 help = "Platform file that matches with the input data", metavar = "character"),
     make_option(c( "-d", "--dir_out"), type = "character", default = 'lmm-filter', 
@@ -379,17 +380,20 @@ option_list = list(
     make_option(c( "-s", "--seed"), type = "integer", default = NULL, 
                 help = "Seed for random number generator", metavar = "integer"),
     make_option("--pval", type = "character", default = '1e-02',
-                help = "pvalue threshold for identifying significant snps", metavar = "numeric")
+                help = "P-value threshold for identifying significant snps, and exact name of output subdirectory", metavar = "character"),
+    make_option("--noflip", action = "store_true", default = FALSE,
+                help = "Run phase 1 only (removals only, no flips).  This is best for data where reverse-complement strand flips are not expected, such as whole-genome sequencing.  (Flips are often expected in genotyping array data.)")
 )
 
 opt_parser <- OptionParser(option_list = option_list)
 opt <- parse_args(opt_parser)
 # get values
-input_data <- opt$file
+input_data <- opt$bfile
 platform_file <- opt$platform
 pval <- opt$pval
 dir_out <- opt$dir_out
 seed <- opt$seed
+flip <- !opt$noflip
 
 # annoying work to get current script location, to call other scripts within it as we navigate a directory structure elsewhere
 initial_options <- commandArgs(trailingOnly = FALSE)
@@ -399,4 +403,4 @@ script_path <- sub(file_arg, "", initial_options[grep(file_arg, initial_options)
 script_dir <- normalizePath( dirname(script_path) )
 
 # global vars: seed, script_dir
-lmm_filter( input_data, platform_file, pval = pval, dir_out = dir_out )
+lmm_filter( input_data, platform_file, pval = pval, dir_out = dir_out, flip = flip )

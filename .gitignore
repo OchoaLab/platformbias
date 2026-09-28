@@ -8,3 +8,4 @@ unpub
 inst/doc
 /doc/
 /Meta/
+/inst/test/lmm-filter_EXPECTED*/saige_1_0_output.txt.gz
