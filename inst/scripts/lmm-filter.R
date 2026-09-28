@@ -3,10 +3,6 @@ library(optparse)
 
 # big pic TODOs
 # - make flip (phase2) optional (in WGS data it shouldn't be needed)
-# - add phase3 experiment
-
-## rlang::global_entrace()
-## options(rlang_backtrace_on_error = "full")
 
 # main function/loop
 # initial p-value is string because we want folder name to be exactly this ("1e-02" instead of "0.01"), but after dir is made we can turn to numeric
@@ -64,7 +60,7 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
         count <- out$count
         
         # update log, even for stoping iterations because they took time (saige)
-        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, remove = count, saige_runtime = saige$time ) )
+        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, edits = count, saige_runtime = saige$time ) )
         
         # stop loop when there are zero removals
         if ( count == 0 ) break
@@ -90,7 +86,7 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     iter <- 0
 
     # process flip and removal of SNPs, created new plink files
-    bim <- run_plink_flip( bim, input_data, iter, platform_file )
+    bim <- run_plink_flip( phase, iter, bim, input_data, platform_file )
     
     repeat { 
         saige <- run_saige( phase, iter, platform_file )
@@ -100,7 +96,7 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
         count <- out$count
 
         # update log, even for stoping iterations because they took time (saige)
-        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, remove = count, saige_runtime = saige$time ) )
+        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, edits = count, saige_runtime = saige$time ) )
         
         # stop loop when there are zero removals
         if ( count == 0 ) break
@@ -112,11 +108,34 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
         iter <- iter + 1
     }
     
-    # write summary data, now that it is complete!
-    write.table( iteration_summary, "iteration_summary.txt", quote = FALSE, sep = "\t", row.names = FALSE )
-    
     # delete BED files again.  These are not what we may want in the end because it's controls only.  In practice we want to process full data separately, following `preds.txt.gz`.
     delete_plink_bed( iter )
+    
+    ########################################################################
+
+    # start phase 3
+    phase <- 3
+    iter <- 0
+
+    # created new plink files with remaining flippable SNPs flipped, to test both orientations
+    run_plink_flip( phase, iter, bim, input_data, platform_file )
+    
+    # phase 3 is a single iteration, since nothing else is getting removed
+    saige <- run_saige( phase, iter, platform_file )
+
+    # perform the final classification!
+    out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
+    bim <- out$bim
+    count <- out$count
+    
+    # update log, even for stoping iterations because they took time (saige)
+    iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, edits = count, saige_runtime = saige$time ) )
+
+    # delete files one more time
+    delete_plink_bed( iter )
+
+    # write summary data, now that it is complete!
+    write.table( iteration_summary, "iteration_summary.txt", quote = FALSE, sep = "\t", row.names = FALSE )
     
     # produce final output of method, preds.txt.gz, which summarizes which loci are keep, remove, or flip.
     write_preds( bim )
@@ -167,8 +186,9 @@ run_saige <- function( phase, iter, platform_file, input_bfile = iter ) {
         seedopt <- if ( !is.null( seed ) ) paste0( '-s ', seed ) else ''
         
         # merged steps
-        command <- paste0( 'Rscript ', script_dir, '/saige.R -f "', input_bfile, '" -p "', platform_file, '" -o "', output_prefix, '" ', seedopt, ' > ', output_prefix, '.log' )
-        time <- system.time( system( command ) )[3]
+        command <- paste0( 'Rscript ', script_dir, '/saige.R -f "', input_bfile, '" -p "', platform_file, '" -o "', output_prefix, '" ', seedopt, ' &> ', output_prefix, '.log' )
+        time <- system.time( ret <- system( command ) )[3]
+        if ( ret != 0 ) stop( 'SAIGE failed with return value: ', ret, ' (see logs)' )
         
         # cleanup, not needed if run was successful
         unlink( paste0( output_prefix, c( '_output.txt.index', '.rda', '.varianceRatio.txt', '.log' ) ) )
@@ -197,7 +217,7 @@ identify_sig_snps <- function( phase, iter, pval, bim, saige_output_file ) {
     indexes <- match( data$MarkerID, bim$id )
     if ( phase == 1 ) {
         bim$pval_fwd[ indexes ] <- data$p.value
-    } else {
+    } else if ( phase == 2 ) {
         # here assignment depends on whether the SNP has been flipped already or not
         # this is a logical vector same length as indexes
         indexes2 <- bim$category[ indexes ] == 'flip'
@@ -205,23 +225,54 @@ identify_sig_snps <- function( phase, iter, pval, bim, saige_output_file ) {
         bim$pval_rev[ indexes[ indexes2 ] ] <- data$p.value[ indexes2 ]
         # when false, assign to FWD again
         bim$pval_fwd[ indexes[ !indexes2 ] ] <- data$p.value[ !indexes2 ]
+    } else {
+        # phase 3
+        # fill in only REV p-values for flippable loci that were previously keep, and which didn't have NA FWD p-values
+        # all older p-values stay the same, they are more accurate that way
+        bim2 <- bim[ indexes, ]
+        indexes2 <- bim2$revcomp & bim2$category == 'keep' & !is.na( bim2$pval_fwd )
+        # confirm that all those p-values are NA
+        stopifnot( all( is.na( bim2$pval_rev[ indexes2 ] ) ) )
+        bim$pval_rev[ indexes[ indexes2 ] ] <- data$p.value[ indexes2 ]
     }
-    
-    # get significant SNPs, which are the new removals
-    sig_snps <- as.character( data$MarkerID[ data$p.value < pval ] )
-    
-    # mark new removals in BIM file, with detailed info
-    indexes <- bim$id %in% sig_snps
-    bim$category[ indexes ] <- 'remove'
-    bim$phase[ indexes ] <- phase
-    bim$iter[ indexes ] <- iter
+
+    if ( phase == 3 ) {
+        # phase 3 doesn't have removals, and no need to set p-value thresholds
+        
+        # now that we have both p-values, make the final decision on which loci get flipped
+        # this automatically focuses on flippable (revcomp) loci
+        # need to additionally force that previous category was not "remove", otherwise removes get incorrectly rescued (into keep or flip) in this new comparison
+        # this is a vector of indexes
+        indexes <- which( !is.na( bim$pval_fwd ) & !is.na( bim$pval_rev ) & bim$category != 'remove' )
+        bim2 <- bim[ indexes, ]
+        category_new <- ifelse( bim2$pval_fwd < bim2$pval_rev, 'flip', 'keep' )
+        # count edits
+        # this is a logical vector same length as indexes
+        indexes2 <- bim$category[ indexes ] != category_new
+        count <- sum( indexes2 )
+        # overwrite with new data now, with detailed info
+        indexes3 <- indexes[ indexes2 ]
+        bim$category[ indexes3 ] <- category_new[ indexes2 ]
+        bim$phase[ indexes3 ] <- phase
+        bim$iter[ indexes3 ] <- iter
+    } else {
+        # get significant SNPs, which are the new removals
+        sig_snps <- as.character( data$MarkerID[ data$p.value < pval ] )
+        count <- length( sig_snps )
+        
+        # mark new removals in BIM file, with detailed info
+        indexes <- bim$id %in% sig_snps
+        bim$category[ indexes ] <- 'remove'
+        bim$phase[ indexes ] <- phase
+        bim$iter[ indexes ] <- iter
+    }
     
     # cleanup: don't need SAIGE file anymore, unless it's the first one
     if ( phase != 1 || iter != 0 )
         unlink( saige_output_file )
     
     # return a few things
-    list( bim = bim, count = length( sig_snps ) )
+    list( bim = bim, count = count )
 }
 
 delete_plink_bed <- function( input_bfile )
@@ -257,14 +308,24 @@ run_plink_remove <- function( phase, iter, bim, input_data ) {
     unlink( exclude_file )
 }
 
-run_plink_flip <- function( bim, input_data, output_prefix, platform_file ) {
-    # first, reclassify SNPs that are currently "remove" and flippable as "flip" (to be further removed in subsequent iterations)
-    bim$category[ bim$category == 'remove' & bim$revcomp ] <- 'flip'
+run_plink_flip <- function( phase, iter, bim, input_data, platform_file ) {
+    if ( phase == 2 ) {
+        # first, reclassify SNPs that are currently "remove" and flippable as "flip" (to be further removed in subsequent iterations)
+        bim$category[ bim$category == 'remove' & bim$revcomp ] <- 'flip'
+        # these are the loci we want to flip in output file
+        snps_flip <- bim$id[ bim$category == 'flip' ]
+    } else if ( phase == 3 ) {
+        # don't reclassify anything yet (BIM stays unedited for now), but do edit plink file to test second orientation
+        # keep things we already determined to flip, but add to that flippable SNPs we kept but haven't flipped yet
+        # also exclude SNPs with FWD p-values that were NA (unclear how to decide whether to flip those or not), we'll keep
+        snps_flip <- bim$id[ bim$revcomp & bim$category != 'remove' & !is.na( bim$pval_fwd ) ]
+    }
     # write these SNP IDs into files to perform edit in plink file
-    exclude_file <- 'phase2_init_remove.txt'
-    flip_file <- 'phase2_init_flip.txt'
+    exclude_file <- paste0( 'phase', phase, '_init_remove.txt' )
+    flip_file <- paste0( 'phase', phase, '_init_flip.txt' )
+    # SNPs marked remove are permanently removed (same for both phases)
     writeLines( bim$id[ bim$category == 'remove' ], exclude_file )
-    writeLines( bim$id[ bim$category == 'flip' ], flip_file )
+    writeLines( snps_flip, flip_file )
     
     # make flip ID file (really platform 2 IDs)
     platform_two_id_file <- 'PLATFORM-TWO-IDs.txt'
@@ -283,7 +344,7 @@ run_plink_flip <- function( bim, input_data, output_prefix, platform_file ) {
             '--bfile', input_data,
             '--exclude', exclude_file,
             '--make-bed',
-            '--out', output_prefix,
+            '--out', iter,
             '--silent',
             '--flip', flip_file,
             '--flip-subset', platform_two_id_file

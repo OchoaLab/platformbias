@@ -26,6 +26,7 @@ time Rscript ../scripts/lmm-filter.R -f test --platform platform.txt -s 2026
 
 # compare new output to most recent one, with tolerance for p-value precision and runtime variance
 Rscript compare_outputs.R
+Rscript validate_preds.R
 
 # cleanup!
 rm -r lmm-filter/
