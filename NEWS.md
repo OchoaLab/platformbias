@@ -43,3 +43,7 @@
 # platformbias 0.0.9.9000 (2026-08-18)
 
 - Renamed package from `popgeninfer` to `platformbias`.
+
+# platformbias 0.0.10.9000 (2026-09-28)
+
+- Added `lmm-filter.R` under `inst/scripts`, a script for the command line that implements LMM-filter using SAIGE and plink2
