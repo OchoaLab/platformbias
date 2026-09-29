@@ -1,28 +1,15 @@
+# if next path is correct, adjusted, or removed (if not needed), run test this way:
+# bash test.bash
+
 # more hacks to run saige from pixi environment
 # NOTE: also need to install other R packages in pixi env: optparse, genio, tidyverse, pak, then platformbias from github (for now)
 shopt -s expand_aliases
 alias Rscript="pixi run -m ~/bin/src/github/SAIGE/ Rscript"
 
-### OLD
 
-# # generate data for replicates
-# PVAL=1e-02
-# # these need to exist already
-# input_data=test
-# platform_file=platform.txt
-
-# # set a seed so saige (which is random) gives reproducible results in tests
-# # saige is still sort of random, but maybe less so?
-# SEEDOPT='-s 2026'
-
-# # run lmm-filter!
-# time . ../scripts/lmm-filter.bash
-
-### NEW
+## STANDARD test
 
 time Rscript ../scripts/lmm-filter.R --bfile test --platform platform.txt -s 2026
-
-### SHARED
 
 # compare new output to most recent one, with tolerance for p-value precision and runtime variance
 Rscript compare_outputs.R
@@ -30,6 +17,7 @@ Rscript validate_preds.R
 
 # cleanup!
 rm -r lmm-filter/
+
 
 ## NOFLIP version!
 
