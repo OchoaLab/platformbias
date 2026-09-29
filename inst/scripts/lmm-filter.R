@@ -3,11 +3,20 @@ library(optparse)
 
 # main function/loop
 # initial p-value is string because we want folder name to be exactly this ("1e-02" instead of "0.01"), but after dir is made we can turn to numeric
-lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lmm-filter', flip = TRUE ) {
+lmm_filter <- function(
+                       input_data,
+                       platform_file,
+                       pval = '1e-02',
+                       dir_out = 'lmm-filter',
+                       flip = TRUE,
+                       iid = 'IID',
+                       fid = 'FID',
+                       platform_col = 'PLATFORM'
+                       ) {
     # validate inputs
-    if ( missing( input_data ) )
+    if ( missing( input_data ) || is.na( input_data ) )
         stop( '`input_data` is required!' )
-    if ( missing( platform_file ) )
+    if ( missing( platform_file ) || is.na( platform_file ) )
         stop( '`platform_file` is required!' )
     # require that inputs exist
     for ( ext in c('bed', 'bim', 'fam') ) {
@@ -38,7 +47,7 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
     iter <- 0
 
     # iteration 0 is the same for all p-values, put it in base directory to share automatically
-    saige <- run_saige( phase, iter, platform_file, input_data )
+    saige <- run_saige( phase, iter, platform_file, iid, platform_col, input_data )
 
     # if the directory exists, delete entirely! (to avoid overwriting existing files)
     if ( dir.exists( pval ) )
@@ -69,7 +78,7 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
         iter <- iter + 1
         
         # Run SAIGE
-        saige <- run_saige( phase, iter, platform_file )
+        saige <- run_saige( phase, iter, platform_file, iid, platform_col )
     }
 
     # more cleanup
@@ -84,10 +93,10 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
         iter <- 0
 
         # process flip and removal of SNPs, created new plink files
-        bim <- run_plink_flip( phase, iter, bim, input_data, platform_file )
+        bim <- run_plink_flip( phase, iter, bim, input_data, platform_file, iid, fid, platform_col )
         
         repeat { 
-            saige <- run_saige( phase, iter, platform_file )
+            saige <- run_saige( phase, iter, platform_file, iid, platform_col )
 
             out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
             bim <- out$bim
@@ -116,10 +125,10 @@ lmm_filter <- function( input_data, platform_file, pval = '1e-02', dir_out = 'lm
         iter <- 0
 
         # created new plink files with remaining flippable SNPs flipped, to test both orientations
-        run_plink_flip( phase, iter, bim, input_data, platform_file )
+        run_plink_flip( phase, iter, bim, input_data, platform_file, iid, fid, platform_col )
         
         # phase 3 is a single iteration, since nothing else is getting removed
-        saige <- run_saige( phase, iter, platform_file )
+        saige <- run_saige( phase, iter, platform_file, iid, platform_col )
 
         # perform the final classification!
         out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
@@ -165,7 +174,7 @@ read_bim <- function( input_data, flip = TRUE ) {
 }
 
 # global vars used here: seed, script_dir
-run_saige <- function( phase, iter, platform_file, input_bfile = iter ) {
+run_saige <- function( phase, iter, platform_file, iid = 'IID', platform_col = 'PLATFORM', input_bfile = iter ) {
     # every iteration starts with a SAIGE run, might as well put this here
     message( 'phase ', phase, ', iter ', iter )
     
@@ -187,7 +196,7 @@ run_saige <- function( phase, iter, platform_file, input_bfile = iter ) {
         seedopt <- if ( !is.null( seed ) ) paste0( '-s ', seed ) else ''
         
         # merged steps
-        command <- paste0( 'Rscript ', script_dir, '/saige.R -f "', input_bfile, '" -p "', platform_file, '" -o "', output_prefix, '" ', seedopt, ' &> ', output_prefix, '.log' )
+        command <- paste0( 'Rscript ', script_dir, '/saige.R --bfile "', input_bfile, '" --platform "', platform_file, '" --iid "', iid, '" --platform_col "', platform_col, '" -o "', output_prefix, '" ', seedopt, ' &> ', output_prefix, '.log' )
         time <- system.time( ret <- system( command ) )[3]
         if ( ret != 0 ) stop( 'SAIGE failed with return value: ', ret, ' (see logs)' )
         
@@ -311,7 +320,7 @@ run_plink_remove <- function( phase, iter, bim, input_data ) {
     unlink( exclude_file )
 }
 
-run_plink_flip <- function( phase, iter, bim, input_data, platform_file ) {
+run_plink_flip <- function( phase, iter, bim, input_data, platform_file, iid, fid, platform_col ) {
     if ( phase == 2 ) {
         # first, reclassify SNPs that are currently "remove" and flippable as "flip" (to be further removed in subsequent iterations)
         bim$category[ bim$category == 'remove' & bim$revcomp ] <- 'flip'
@@ -336,7 +345,11 @@ run_plink_flip <- function( phase, iter, bim, input_data, platform_file ) {
     # read platform file
     data <- read.table( platform_file, header = TRUE )
     # keep individuals with PLATFORM==1 only (second platform, first one is 0)
-    data <- data[ data$PLATFORM == 1, ]
+    data <- data[ data[[ platform_col ]] == 1, ]
+    # after this, `platform_col` isn't used by plink2, so it doesn't matter what it is
+    # however, IID and FID must be what plink expects, lets rename columns
+    colnames( data )[ colnames( data ) == iid ] <- 'IID'
+    colnames( data )[ colnames( data ) == fid ] <- 'FID'
     # write to output
     write.table( data, platform_two_id_file, quote = FALSE, sep = "\t", row.names = FALSE )
 
@@ -374,18 +387,24 @@ write_preds <- function( bim )
 
 # terminal inputs
 option_list = list(
-    make_option("--bfile", type = "character",
+    make_option("--bfile", type = "character", default = NA,
                 help = "Input plink binary file without extensions (bed/bim/fam)", metavar = "character"),
-    make_option("--platform", type = "character",
+    make_option("--platform", type = "character", default = NA,
                 help = "Platform file that matches with the input data", metavar = "character"),
     make_option(c( "-d", "--dir_out"), type = "character", default = 'lmm-filter', 
-                help = "Output directory", metavar = "character"),
+                help = "Output directory (default lmm-filter)", metavar = "character"),
     make_option(c( "-s", "--seed"), type = "integer", default = NULL, 
                 help = "Seed for random number generator", metavar = "integer"),
     make_option("--pval", type = "character", default = '1e-02',
-                help = "P-value threshold for identifying significant snps, and exact name of output subdirectory", metavar = "character"),
+                help = "P-value threshold for identifying significant snps, and exact name of output subdirectory (default 1e-02)", metavar = "character"),
     make_option("--noflip", action = "store_true", default = FALSE,
-                help = "Run phase 1 only (removals only, no flips).  This is best for data where reverse-complement strand flips are not expected, such as whole-genome sequencing.  (Flips are often expected in genotyping array data.)")
+                help = "Run phase 1 only (removals only, no flips).  This is best for data where reverse-complement strand flips are not expected, such as whole-genome sequencing.  (Flips are often expected in genotyping array data.)"),
+    make_option("--iid", type = "character", default = 'IID',
+                help = "Name of individual ID column in platform file (default IID)", metavar = "character"),
+    make_option("--fid", type = "character", default = 'FID',
+                help = "Name of family ID column in platform file (default FID)", metavar = "character"),
+    make_option("--platform_col", type = "character", default = 'PLATFORM',
+                help = "Name of platform column (treated as binary trait) in platform file (default PLATFORM)", metavar = "character")
 )
 
 opt_parser <- OptionParser(option_list = option_list)
@@ -397,6 +416,15 @@ pval <- opt$pval
 dir_out <- opt$dir_out
 seed <- opt$seed
 flip <- !opt$noflip
+iid <- opt$iid
+fid <- opt$fid
+platform_col <- opt$platform_col
+
+# informative errors for the two required inputs
+if ( is.na( input_data ) )
+    stop( '`--bfile` is required!' )
+if ( is.na( platform_file ) )
+    stop( '`--platform` is required!' )
 
 # annoying work to get current script location, to call other scripts within it as we navigate a directory structure elsewhere
 initial_options <- commandArgs(trailingOnly = FALSE)
@@ -406,4 +434,4 @@ script_path <- sub(file_arg, "", initial_options[grep(file_arg, initial_options)
 script_dir <- normalizePath( dirname(script_path) )
 
 # global vars: seed, script_dir
-lmm_filter( input_data, platform_file, pval = pval, dir_out = dir_out, flip = flip )
+lmm_filter( input_data, platform_file, pval = pval, dir_out = dir_out, flip = flip, iid = iid, fid = fid, platform_col = platform_col )

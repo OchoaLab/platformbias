@@ -19,6 +19,23 @@ Rscript validate_preds.R
 rm -r lmm-filter/
 
 
+
+## non-default IID,FID,PLATFORM column names in platform file
+
+# use exact file from simulation, which we want to work with
+# since platform assignments are identical, the answer should match standard run
+
+time Rscript ../scripts/lmm-filter.R --bfile test --platform covar.txt -s 2026 --iid iid --fid famid --platform_col pheno
+
+# compare new output to most recent one, with tolerance for p-value precision and runtime variance
+Rscript compare_outputs.R
+Rscript validate_preds.R
+
+# cleanup!
+rm -r lmm-filter/
+
+
+
 ## NOFLIP version!
 
 time Rscript ../scripts/lmm-filter.R --bfile test --platform platform.txt -s 2026 --noflip

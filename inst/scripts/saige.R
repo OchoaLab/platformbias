@@ -3,10 +3,14 @@ library(optparse)
 
 # terminal inputs
 option_list = list(
-    make_option(c( "-f", "--file"), type = "character",
-                help = "input file, after plink removed sig snps", metavar = "character"),
-    make_option(c( "-p", "--platform"), type = "character",
+    make_option("--bfile", type = "character",
+                help = "Input plink binary file without extensions (bed/bim/fam)", metavar = "character"),
+    make_option("--platform", type = "character",
                 help = "Platform file that matches with the input data", metavar = "character"),
+    make_option("--iid", type = "character", default = 'IID',
+                help = "Name of individual ID column in platform file", metavar = "character"),
+    make_option("--platform_col", type = "character", default = 'PLATFORM',
+                help = "Name of platform column (treated as binary trait) in platform file", metavar = "character"),
     make_option(c( "-o", "--out"), type = "character", default = NA, 
                 help = "Output prefix", metavar = "character"),
     make_option(c( "-s", "--seed"), type = "integer", default = NULL, 
@@ -16,9 +20,11 @@ option_list = list(
 opt_parser <- OptionParser(option_list = option_list)
 opt <- parse_args(opt_parser)
 # get values
-plinkFile <- opt$file
+plinkFile <- opt$bfile
 phenoFile <- opt$platform
 outputPrefix <- opt$out
+iid <- opt$iid
+platform_col <- opt$platform_col
 
 set.seed( opt$seed )
 
@@ -26,8 +32,8 @@ message( 'SAIGE step 1' )
 fitNULLGLMM(
     plinkFile = plinkFile,
     phenoFile = phenoFile,
-    phenoCol = 'PLATFORM',
-    sampleIDColinphenoFile = 'IID',
+    phenoCol = platform_col,
+    sampleIDColinphenoFile = iid,
     traitType = 'binary',
     outputPrefix = outputPrefix,
     IsOverwriteVarianceRatioFile = TRUE,
