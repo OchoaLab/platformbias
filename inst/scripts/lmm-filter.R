@@ -61,12 +61,10 @@ lmm_filter <- function(
     iteration_summary <- NULL
 
     repeat {
-        out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
+        out <- identify_sig_snps( phase, iter, pval, bim, saige, iteration_summary )
         bim <- out$bim
         count <- out$count
-        
-        # update log, even for stoping iterations because they took time (saige)
-        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, edits = count, saige_runtime = saige$time ) )
+        iteration_summary <- out$iteration_summary
         
         # stop loop when there are zero removals
         if ( count == 0 ) break
@@ -98,12 +96,10 @@ lmm_filter <- function(
         repeat { 
             saige <- run_saige( phase, iter, platform_file, iid, platform_col )
 
-            out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
+            out <- identify_sig_snps( phase, iter, pval, bim, saige, iteration_summary )
             bim <- out$bim
             count <- out$count
-
-            # update log, even for stoping iterations because they took time (saige)
-            iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, edits = count, saige_runtime = saige$time ) )
+            iteration_summary <- out$iteration_summary
             
             # stop loop when there are zero removals
             if ( count == 0 ) break
@@ -131,13 +127,11 @@ lmm_filter <- function(
         saige <- run_saige( phase, iter, platform_file, iid, platform_col )
 
         # perform the final classification!
-        out <- identify_sig_snps( phase, iter, pval, bim, saige$file )
+        out <- identify_sig_snps( phase, iter, pval, bim, saige, iteration_summary )
         bim <- out$bim
         count <- out$count
+        iteration_summary <- out$iteration_summary
         
-        # update log, even for stoping iterations because they took time (saige)
-        iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, edits = count, saige_runtime = saige$time ) )
-
         # delete files one more time
         delete_plink_bed( iter )
     }
@@ -216,8 +210,9 @@ run_saige <- function( phase, iter, platform_file, iid = 'IID', platform_col = '
     return( list( file = normalizePath( output_file ), time = time ) )
 }
 
-identify_sig_snps <- function( phase, iter, pval, bim, saige_output_file ) {
+identify_sig_snps <- function( phase, iter, pval, bim, saige, iteration_summary ) {
     # read SAIGE summary statistics
+    saige_output_file <- saige$file
     data <- read.table( saige_output_file, header = TRUE )
     
     # we want to remember all p-values (not just significant ones)
@@ -281,9 +276,12 @@ identify_sig_snps <- function( phase, iter, pval, bim, saige_output_file ) {
     # cleanup: don't need SAIGE file anymore, unless it's the first one
     if ( phase != 1 || iter != 0 )
         unlink( saige_output_file )
+
+    # update log, even for stoping iterations because they took time (saige)
+    iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, edits = count, saige_runtime = saige$time ) )
     
     # return a few things
-    list( bim = bim, count = count )
+    list( bim = bim, count = count, iteration_summary = iteration_summary )
 }
 
 delete_plink_bed <- function( input_bfile )
