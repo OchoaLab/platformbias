@@ -90,8 +90,11 @@ lmm_filter <- function(
         phase <- 2
         iter <- 0
 
+        # one time, create file that assists flips with plink2
+        platform_two_id_file <- make_platform_two_ids_file( platform_file, iid, fid, platform_col )
+        
         # process flip and removal of SNPs, created new plink files
-        bim <- run_plink_flip( phase, iter, bim, input_data, platform_file, iid, fid, platform_col )
+        bim <- run_plink_flip( phase, iter, bim, input_data, platform_two_id_file )
         
         repeat { 
             saige <- run_saige( phase, iter, platform_file, iid, platform_col )
@@ -121,7 +124,7 @@ lmm_filter <- function(
         iter <- 0
 
         # created new plink files with remaining flippable SNPs flipped, to test both orientations
-        run_plink_flip( phase, iter, bim, input_data, platform_file, iid, fid, platform_col )
+        bim <- run_plink_flip( phase, iter, bim, input_data, platform_two_id_file )
         
         # phase 3 is a single iteration, since nothing else is getting removed
         saige <- run_saige( phase, iter, platform_file, iid, platform_col )
@@ -134,6 +137,8 @@ lmm_filter <- function(
         
         # delete files one more time
         delete_plink_bed( iter )
+        # done with this too
+        unlink( platform_two_id_file )
     }
 
     # write summary data, now that it is complete!
@@ -287,6 +292,24 @@ identify_sig_snps <- function( phase, iter, pval, bim, saige, iteration_summary 
 delete_plink_bed <- function( input_bfile )
     unlink( paste0( input_bfile, '.', c( 'bed', 'bim', 'fam', 'log' ) ) )
 
+# make flip ID file (really platform 2 IDs)
+make_platform_two_ids_file <- function( platform_file, iid, fid, platform_col ) {
+    platform_two_id_file <- 'PLATFORM-TWO-IDs.txt'
+
+    # read platform file
+    data <- read.table( platform_file, header = TRUE )
+    # keep individuals with PLATFORM==1 only (second platform, first one is 0)
+    data <- data[ data[[ platform_col ]] == 1, ]
+    # after this, `platform_col` isn't used by plink2, so it doesn't matter what it is
+    # however, IID and FID must be what plink expects, lets rename columns
+    colnames( data )[ colnames( data ) == iid ] <- 'IID'
+    colnames( data )[ colnames( data ) == fid ] <- 'FID'
+    # write to output
+    write.table( data, platform_two_id_file, quote = FALSE, sep = "\t", row.names = FALSE )
+    
+    return( platform_two_id_file )
+}
+
 run_plink_remove <- function( phase, iter, bim, input_data ) {
     # special behavior for very first case only
     first <- phase == 1 && iter == 0
@@ -318,7 +341,7 @@ run_plink_remove <- function( phase, iter, bim, input_data ) {
     unlink( exclude_file )
 }
 
-run_plink_flip <- function( phase, iter, bim, input_data, platform_file, iid, fid, platform_col ) {
+run_plink_flip <- function( phase, iter, bim, input_data, platform_two_id_file ) {
     if ( phase == 2 ) {
         # first, reclassify SNPs that are currently "remove" and flippable as "flip" (to be further removed in subsequent iterations)
         bim$category[ bim$category == 'remove' & bim$revcomp ] <- 'flip'
@@ -337,20 +360,6 @@ run_plink_flip <- function( phase, iter, bim, input_data, platform_file, iid, fi
     writeLines( bim$id[ bim$category == 'remove' ], exclude_file )
     writeLines( snps_flip, flip_file )
     
-    # make flip ID file (really platform 2 IDs)
-    platform_two_id_file <- 'PLATFORM-TWO-IDs.txt'
-
-    # read platform file
-    data <- read.table( platform_file, header = TRUE )
-    # keep individuals with PLATFORM==1 only (second platform, first one is 0)
-    data <- data[ data[[ platform_col ]] == 1, ]
-    # after this, `platform_col` isn't used by plink2, so it doesn't matter what it is
-    # however, IID and FID must be what plink expects, lets rename columns
-    colnames( data )[ colnames( data ) == iid ] <- 'IID'
-    colnames( data )[ colnames( data ) == fid ] <- 'FID'
-    # write to output
-    write.table( data, platform_two_id_file, quote = FALSE, sep = "\t", row.names = FALSE )
-
     # run plink to remove loci and flip subset
     ret <- system2(
         'plink2',
@@ -367,7 +376,7 @@ run_plink_flip <- function( phase, iter, bim, input_data, platform_file, iid, fi
     if ( ret != 0 ) stop( 'plink2 failed with return value: ', ret, ' (see logs)' )
     
     # cleanup
-    unlink( c( platform_two_id_file, exclude_file, flip_file ) )
+    unlink( c( exclude_file, flip_file ) )
     # NOTE: this uses the original `input_data` always, never delete it! (unlike run_plink_remove)
     
     # this was edited, return!
