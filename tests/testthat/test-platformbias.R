@@ -585,12 +585,12 @@ test_that( "af_filter works", {
 test_that( "filter_category works", {
     # come up with an example with all relevant cases, all values far from the threshold one way or the other
     data <- tibble(
-        revcomp  = c( FALSE, FALSE,  TRUE,  TRUE,  TRUE,  TRUE,  TRUE ),
-        pval_fwd = c(   0.9, 1e-10,   0.1,   0.9,   0.9, 1e-10, 1e-10 ),
-        pval_rev = c(    NA,    NA,   0.9,   0.1, 1e-10,   0.9, 1e-10 )
+        revcomp  = c( FALSE, FALSE,  TRUE,  TRUE,  TRUE,  TRUE,  TRUE, FALSE, TRUE, TRUE,  TRUE ),
+        pval_fwd = c(   0.9, 1e-10,   0.1,   0.9,   0.9, 1e-10, 1e-10,    NA,   NA,  0.1, 1e-10 ),
+        pval_rev = c(    NA,    NA,   0.9,   0.1, 1e-10,   0.9, 1e-10,    NA,   NA,   NA,    NA )
     )
     pcut <- 0.01
-    cat_exp = c( 'keep', 'remove', 'flip', 'keep', 'keep', 'flip', 'remove' )
+    cat_exp = c( 'keep', 'remove', 'flip', 'keep', 'keep', 'flip', 'remove', 'keep', 'keep', 'keep', 'remove' )
     
     expect_silent( 
         cat <- filter_category( data, pcut )

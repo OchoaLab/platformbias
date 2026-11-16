@@ -11,7 +11,7 @@ filter_category(data, pcut)
 \itemize{
 \item \code{revcomp}: Logical, whether locus is identified as having reverse complement (flippale) alleles.
 \item \code{pval_fwd}: p-values in given orientation.
-\item \code{pval_rev}: p-values in reversed orientation for the second dataset, for loci with \code{revcomp == TRUE}.  Values for rest of loci are ignored.
+\item \code{pval_rev}: p-values in reversed orientation for the second dataset, for loci with \code{revcomp == TRUE}.
 }}
 
 \item{pcut}{The p-value threshold}
@@ -22,7 +22,8 @@ A vector with length equal to the number of rows of \code{data}, with one of 3 p
 \description{
 This takes the output of \code{\link[=af_filter]{af_filter()}} or an equivalent function and classifies loci depending on the pattern of significance, which is threshold-dependent.
 For loci that only have forward p-values, the are classified as "remove" if they are significant (below the threshold) or "keep" otherwise.
-For loci with both forward and reversed p-values (which must have reversed complement ref/alt alleles), they are classified as "remove" if both p-values are significant, "flip" if the forward p-value is the smallest, and "keep" otherwise.
+For loci with both forward and reversed p-values (which should have reversed complement ref/alt alleles, a warning is issued if this is not true), they are classified as "remove" if both p-values are significant, "flip" if the forward p-value is the smallest, and "keep" otherwise.
+Loci with \code{NA} forward p-values are always "keep" (even if the reverse p-value is not \code{NA}).
 }
 \examples{
 library(tibble)

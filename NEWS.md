@@ -47,3 +47,8 @@
 # platformbias 0.0.10.9000 (2026-09-28)
 
 - Added `lmm-filter.R` under `inst/scripts`, a script for the command line that implements LMM-filter using SAIGE and plink2
+
+# platformbias 0.0.11.9000 (2026-11-16)
+
+- Function `filter_category` now handles NA p-values, needed to work with partial lmm-filter runs.
+- (`lmm-filter.R` many undocumented changes, work still in progress.)
