@@ -50,5 +50,5 @@
 
 # platformbias 0.0.11.9000 (2026-11-16)
 
-- Function `filter_category` now handles NA p-values, needed to work with partial lmm-filter runs.
+- Function `filter_category` now handles NA p-values and data without a reverse p-value column, needed to work with partial lmm-filter runs.
 - (`lmm-filter.R` many undocumented changes, work still in progress.)

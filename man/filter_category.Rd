@@ -10,8 +10,10 @@ filter_category(data, pcut)
 \item{data}{A tibble/data.frame with at least three columns:
 \itemize{
 \item \code{revcomp}: Logical, whether locus is identified as having reverse complement (flippale) alleles.
+To generate warnings if data has reverse p-values at loci that are not revcomp.
 \item \code{pval_fwd}: p-values in given orientation.
 \item \code{pval_rev}: p-values in reversed orientation for the second dataset, for loci with \code{revcomp == TRUE}.
+Optional, if not present all reverse p-values are treated a \code{NA}
 }}
 
 \item{pcut}{The p-value threshold}

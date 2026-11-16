@@ -7,8 +7,10 @@
 #'
 #' @param data A tibble/data.frame with at least three columns:
 #' - `revcomp`: Logical, whether locus is identified as having reverse complement (flippale) alleles.
+#' To generate warnings if data has reverse p-values at loci that are not revcomp.
 #' - `pval_fwd`: p-values in given orientation.
 #' - `pval_rev`: p-values in reversed orientation for the second dataset, for loci with `revcomp == TRUE`.
+#' Optional, if not present all reverse p-values are treated a `NA`
 #' @param pcut The p-value threshold
 #'
 #' @return A vector with length equal to the number of rows of `data`, with one of 3 possible values depending on classification outcome per locus: "remove", "flip", or "keep".
@@ -36,6 +38,10 @@ filter_category <- function( data, pcut ) {
 
     # make output, defaulting to keep when all p-values are NA
     x <- rep.int( 'keep', nrow( data ) )
+
+    # handle if `pval_rev` doesn't exist
+    if ( ! "pval_rev" %in% names( data ) )
+        data$pval_rev <- NA
     
     # do the two cases separately, accounting for NA p-values which force some cases to switch (if we went by `revcomp` status exclusively)
     
