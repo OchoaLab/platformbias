@@ -93,7 +93,7 @@ lmm_filter <- function(
 
         # at the beginning of phase2 only, reclassify SNPs that are currently "remove" and flippable as "flip" (to be further removed in subsequent iterations)
         bim$category[ bim$category == 'remove' & bim$revcomp ] <- 'flip'
-        
+
         # process flip and removal of SNPs, created new plink files
         plink_apply_edits( bim, input_data, platform_two_id_file )
         
@@ -227,31 +227,33 @@ identify_sig_snps <- function( phase, iter, pval, bim, saige, iteration_summary 
     
     # we want to remember all p-values (not just significant ones)
     # most of these get overwritten at every iteration; removed loci keep their last p-value before removal
-    # in phase > 1, revcomp loci have p-values assigned to reverse orientation (not forward), but other loci have forward p-values overwritten
+    # revcomp loci have p-values assigned to reverse orientation (not forward), but other loci have forward p-values overwritten
     # assume SAIGE is the subset (due to removals); all SAIGE SNPs have to be in BIM
     # this is a vector of indexes, length of SAIGE table
     indexes <- match( data$MarkerID, bim$id )
-    if ( phase == 1 ) {
-        bim$pval_fwd[ indexes ] <- data$p.value
-    } else if ( phase == 2 ) {
-        # here assignment depends on whether the SNP has been flipped already or not
+    bim2 <- bim[ indexes, ]
+    if ( phase %in% 1:2 ) {
+        # assignment depends on whether the SNP has been flipped already or not
+        # (note current "remove" loci never have SAIGE data, because SAIGE is only run on loci that haven't been removed, so each locus is either "keep" or "flip")
         # this is a logical vector same length as indexes
-        indexes2 <- bim$category[ indexes ] == 'flip'
-        # when true, assign to REV
-        bim$pval_rev[ indexes[ indexes2 ] ] <- data$p.value[ indexes2 ]
-        # when false, assign to FWD again
-        bim$pval_fwd[ indexes[ !indexes2 ] ] <- data$p.value[ !indexes2 ]
+        indexes2 <- bim2$category == 'keep'
+        # when true, assign to FWD
+        bim$pval_fwd[ indexes[ indexes2 ] ] <- data$p.value[ indexes2 ]
+        # when false, assign to REV
+        # (fails when we don't allow flips, since column `pval_rev` doesn't exist)
+        if ( any( !indexes2 ) )
+            bim$pval_rev[ indexes[ !indexes2 ] ] <- data$p.value[ !indexes2 ]
     } else {
         # phase 3
         # fill in only REV p-values for flippable loci that were previously keep, and which didn't have NA FWD p-values
         # all older p-values stay the same, they are more accurate that way
-        bim2 <- bim[ indexes, ]
         indexes2 <- bim2$revcomp & bim2$category == 'keep' & !is.na( bim2$pval_fwd )
-        # confirm that all those p-values are NA
-        stopifnot( all( is.na( bim2$pval_rev[ indexes2 ] ) ) )
+        ## # confirm that all those p-values are NA (this will not be true in iterated phase3)
+        ## stopifnot( all( is.na( bim2$pval_rev[ indexes2 ] ) ) )
         bim$pval_rev[ indexes[ indexes2 ] ] <- data$p.value[ indexes2 ]
     }
 
+    # this is the "reclassify" step
     if ( phase == 3 ) {
         # phase 3 doesn't have removals, and no need to set p-value thresholds
         
@@ -261,27 +263,20 @@ identify_sig_snps <- function( phase, iter, pval, bim, saige, iteration_summary 
         # this is a vector of indexes
         indexes <- which( !is.na( bim$pval_fwd ) & !is.na( bim$pval_rev ) & bim$category != 'remove' )
         bim2 <- bim[ indexes, ]
-        category_new <- ifelse( bim2$pval_fwd < bim2$pval_rev, 'flip', 'keep' )
-        # count edits
-        # this is a logical vector same length as indexes
-        indexes2 <- bim$category[ indexes ] != category_new
-        count <- sum( indexes2 )
-        # overwrite with new data now, with detailed info
-        indexes3 <- indexes[ indexes2 ]
-        bim$category[ indexes3 ] <- category_new[ indexes2 ]
-        bim$phase[ indexes3 ] <- phase
-        bim$iter[ indexes3 ] <- iter
+        category_new <- bim$category
+        category_new[ indexes ] <- ifelse( bim2$pval_fwd < bim2$pval_rev, 'flip', 'keep' )
     } else {
-        # get significant SNPs, which are the new removals
-        sig_snps <- as.character( data$MarkerID[ data$p.value < pval ] )
-        count <- length( sig_snps )
-        
-        # mark new removals in BIM file, with detailed info
-        indexes <- bim$id %in% sig_snps
-        bim$category[ indexes ] <- 'remove'
-        bim$phase[ indexes ] <- phase
-        bim$iter[ indexes ] <- iter
+        # recategorize using package function!
+        category_new <- filter_category( bim, pval )
     }
+    # mark changed cases as to which phase/iter the change happened in
+    indexes <- bim$category != category_new
+    bim$phase[ indexes ] <- phase
+    bim$iter[ indexes ] <- iter
+    # number of changes, for log and determine convergence
+    count <- sum( indexes )
+    # can overwrite now
+    bim$category <- category_new
     
     # cleanup: don't need SAIGE file anymore, unless it's the first one
     if ( phase != 1 || iter != 0 )
