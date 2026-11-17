@@ -62,7 +62,7 @@ lmm_filter <- function(
     iteration_summary <- NULL
 
     repeat {
-        out <- identify_sig_snps( phase, iter, pval, bim, saige, iteration_summary )
+        out <- update_pvals_and_recategorize( phase, iter, pval, bim, saige, iteration_summary )
         bim <- out$bim
         count <- out$count
         iteration_summary <- out$iteration_summary
@@ -101,7 +101,7 @@ lmm_filter <- function(
             message( 'phase ', phase, ', iter ', iter )
             saige <- run_saige( platform_file, iid, platform_col )
 
-            out <- identify_sig_snps( phase, iter, pval, bim, saige, iteration_summary )
+            out <- update_pvals_and_recategorize( phase, iter, pval, bim, saige, iteration_summary )
             bim <- out$bim
             count <- out$count
             iteration_summary <- out$iteration_summary
@@ -125,19 +125,16 @@ lmm_filter <- function(
         # at the beginning of phase 3, flip all loci we hadn't yet flipped otherwise
         # keep things we already determined to flip, but add to that flippable SNPs we kept but haven't flipped yet
         # also exclude SNPs with FWD p-values that were NA (unclear how to decide whether to flip those or not), we'll keep
-        # (temporarily make a `bim` copy for this, because things don't look edited otherwise and p-values aren't updated correctly)
-        bim2 <- bim
-        bim2$category[ bim$revcomp & bim$category != 'remove' & !is.na( bim$pval_fwd ) ] <- 'flip'
+        bim$category[ bim$revcomp & bim$category != 'remove' & !is.na( bim$pval_fwd ) ] <- 'flip'
         
         # created new plink files with remaining flippable SNPs flipped, to test both orientations
-        plink_apply_edits( bim2, input_data, platform_two_id_file )
+        plink_apply_edits( bim, input_data, platform_two_id_file )
         
-        # phase 3 is a single iteration, since nothing else is getting removed
         message( 'phase ', phase, ', iter ', iter )
         saige <- run_saige( platform_file, iid, platform_col )
         
         # perform the final classification!
-        out <- identify_sig_snps( phase, iter, pval, bim, saige, iteration_summary )
+        out <- update_pvals_and_recategorize( phase, iter, pval, bim, saige, iteration_summary )
         bim <- out$bim
         count <- out$count
         iteration_summary <- out$iteration_summary
@@ -220,73 +217,68 @@ run_saige <- function( platform_file, iid = 'IID', platform_col = 'PLATFORM', in
     return( list( file = normalizePath( output_file ), time = time ) )
 }
 
-identify_sig_snps <- function( phase, iter, pval, bim, saige, iteration_summary ) {
+# update p-values of latest configuration tested with SAIGE
+update_pvals <- function( bim, saige_output_file, first ) {
     # read SAIGE summary statistics
-    saige_output_file <- saige$file
     data <- read.table( saige_output_file, header = TRUE )
-    
-    # we want to remember all p-values (not just significant ones)
-    # most of these get overwritten at every iteration; removed loci keep their last p-value before removal
-    # revcomp loci have p-values assigned to reverse orientation (not forward), but other loci have forward p-values overwritten
+    # removed loci keep their last p-value before removal, rest keep getting updates
+    # flipped loci have rev p-values updated, other loci have forward p-values updated
     # assume SAIGE is the subset (due to removals); all SAIGE SNPs have to be in BIM
     # this is a vector of indexes, length of SAIGE table
     indexes <- match( data$MarkerID, bim$id )
     bim2 <- bim[ indexes, ]
-    if ( phase %in% 1:2 ) {
-        # assignment depends on whether the SNP has been flipped already or not
-        # (note current "remove" loci never have SAIGE data, because SAIGE is only run on loci that haven't been removed, so each locus is either "keep" or "flip")
-        # this is a logical vector same length as indexes
-        indexes2 <- bim2$category == 'keep'
-        # when true, assign to FWD
-        bim$pval_fwd[ indexes[ indexes2 ] ] <- data$p.value[ indexes2 ]
-        # when false, assign to REV
-        # (fails when we don't allow flips, since column `pval_rev` doesn't exist)
-        if ( any( !indexes2 ) )
-            bim$pval_rev[ indexes[ !indexes2 ] ] <- data$p.value[ !indexes2 ]
-    } else {
-        # phase 3
-        # fill in only REV p-values for flippable loci that were previously keep, and which didn't have NA FWD p-values
-        # all older p-values stay the same, they are more accurate that way
-        indexes2 <- bim2$revcomp & bim2$category == 'keep' & !is.na( bim2$pval_fwd )
-        ## # confirm that all those p-values are NA (this will not be true in iterated phase3)
-        ## stopifnot( all( is.na( bim2$pval_rev[ indexes2 ] ) ) )
-        bim$pval_rev[ indexes[ indexes2 ] ] <- data$p.value[ indexes2 ]
-    }
+    # assignment depends on whether the SNP was tested flipped or not
+    # (note current "remove" loci never have SAIGE data, because SAIGE is only run on loci that haven't been removed, so each locus is either "keep" or "flip")
+    # this is a logical vector same length as indexes
+    indexes2 <- bim2$category == 'keep'
+    # when true, assign to FWD
+    bim$pval_fwd[ indexes[ indexes2 ] ] <- data$p.value[ indexes2 ]
+    # when false, assign to REV
+    # (fails when we don't allow flips, since column `pval_rev` doesn't exist)
+    if ( any( !indexes2 ) )
+        bim$pval_rev[ indexes[ !indexes2 ] ] <- data$p.value[ !indexes2 ]
+    # cleanup: don't need SAIGE file anymore, unless it's the first one
+    if ( !first )
+        unlink( saige_output_file )
+    # return edited table
+    return( bim )
+}
 
-    # this is the "reclassify" step
-    if ( phase == 3 ) {
-        # phase 3 doesn't have removals, and no need to set p-value thresholds
-        
-        # now that we have both p-values, make the final decision on which loci get flipped
-        # this automatically focuses on flippable (revcomp) loci
-        # need to additionally force that previous category was not "remove", otherwise removes get incorrectly rescued (into keep or flip) in this new comparison
-        # this is a vector of indexes
-        indexes <- which( !is.na( bim$pval_fwd ) & !is.na( bim$pval_rev ) & bim$category != 'remove' )
-        bim2 <- bim[ indexes, ]
-        category_new <- bim$category
-        category_new[ indexes ] <- ifelse( bim2$pval_fwd < bim2$pval_rev, 'flip', 'keep' )
-    } else {
-        # recategorize using package function!
-        category_new <- filter_category( bim, pval )
-    }
+# "recategorize" all loci according to their new p-values
+recategorize <- function( bim, pval, phase, iter, iteration_summary, saige_runtime ) {
+    # recategorize using package function!
+    category_new <- filter_category( bim, pval )
     # mark changed cases as to which phase/iter the change happened in
     indexes <- bim$category != category_new
+    # this is the only weird case where we flipped things that were previously keep, and if we switch them back to keep it shouldn't be counted as a new move (otherwise trivially all keeps of revcomp loci will count as edited)
+    if ( phase == 3 && iter == 0 )
+        indexes <- indexes & category_new != 'keep'
     bim$phase[ indexes ] <- phase
     bim$iter[ indexes ] <- iter
     # number of changes, for log and determine convergence
     count <- sum( indexes )
     # can overwrite now
     bim$category <- category_new
-    
-    # cleanup: don't need SAIGE file anymore, unless it's the first one
-    if ( phase != 1 || iter != 0 )
-        unlink( saige_output_file )
 
-    # update log, even for stoping iterations because they took time (saige)
-    iteration_summary <- rbind( iteration_summary, data.frame( phase = phase, iter = iter, edits = count, saige_runtime = saige$time ) )
+    # update log, even for stopping iterations because they took time (saige)
+    iteration_summary <- rbind(
+        iteration_summary,
+        data.frame(
+            phase = phase,
+            iter = iter,
+            edits = count,
+            saige_runtime = saige_runtime
+        )
+    )
     
     # return a few things
     list( bim = bim, count = count, iteration_summary = iteration_summary )
+}
+
+# these always happen together
+update_pvals_and_recategorize <- function( phase, iter, pval, bim, saige, iteration_summary ) {
+    bim <- update_pvals( bim, saige$file, phase == 1 && iter == 0 )
+    recategorize( bim, pval, phase, iter, iteration_summary, saige$time )
 }
 
 # make flip ID file (really platform 2 IDs)
